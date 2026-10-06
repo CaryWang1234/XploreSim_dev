@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>REBUILT 战术推演台 · 2026 FRC 对局模拟</title>
+    <meta
+      name="description"
+      content="按 2026 FIRST 机器人竞赛 REBUILT 规则（TU21）实现的比赛推演与战术策划工具：规则引擎 + 蒙特卡洛搜索 AI + 对手建模 + 自博弈调参。"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark">R</span>
+        <div>
+          <h1>REBUILT 战术推演台</h1>
+          <p class="sub">2026 FIRST 机器人竞赛 · 规则版本 TU21 · 全部常量按规则条款实现</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="chip" id="chip-status">就绪</div>
+        <button class="btn ghost" id="btn-tab-rules" type="button">规则依据</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- 1. 配置 -->
+      <section class="panel setup" aria-labelledby="h-setup">
+        <div class="panel-head">
+          <h2 id="h-setup">对局配置</h2>
+          <p class="hint">选机器人 → 改能力参数 → 推演。参数就是你在赛场能测到的量。</p>
+        </div>
+
+        <div class="setup-grid">
+          <div class="alliance-block red">
+            <h3>红联盟</h3>
+            <div class="roster" id="roster-red"></div>
+          </div>
+          <div class="alliance-block blue">
+            <h3>蓝联盟</h3>
+            <div class="roster" id="roster-blue"></div>
+          </div>
+        </div>
+
+        <details class="advanced">
+          <summary>对局条件与规则开关</summary>
+          <div class="adv-grid">
+            <label>优化目标
+              <select id="sel-objective">
+                <option value="rs">排位分 RS（资格赛）</option>
+                <option value="win">胜率（季后赛）</option>
+              </select>
+            </label>
+            <label>赛事等级（影响 RP 阈值 Table 6-5）
+              <select id="sel-event">
+                <option value="regional">区域赛 / 地区赛</option>
+                <option value="districtChamp">地区锦标赛（DCMP / CMP）</option>
+              </select>
+            </label>
+            <label>AUTO 结果归属（Table 6-3）
+              <select id="sel-autowinner">
+                <option value="auto">按仿真结果自动判定</option>
+                <option value="red">强制红方多得</option>
+                <option value="blue">强制蓝方多得</option>
+              </select>
+            </label>
+            <label>随机种子
+              <input id="inp-seed" type="number" value="20260110" step="1" />
+            </label>
+            <label>蒙特卡洛场次
+              <input id="inp-mcmatches" type="number" value="120" min="10" max="600" step="10" />
+            </label>
+            <label>搜索迭代（每决策）
+              <input id="inp-iter" type="number" value="200" min="40" max="600" step="20" />
+            </label>
+            <label class="check">
+              <input id="chk-l1teleop" type="checkbox" checked />
+              TELEOP 允许 LEVEL 1 得 10 分（Table 6-4 与 §6.5.2 冲突，见「规则依据」）
+            </label>
+            <label class="check">
+              <input id="chk-faults" type="checkbox" checked />
+              启用机器人故障/降级（按 reliability）
+            </label>
+          </div>
+        </details>
+
+        <div class="run-row">
+          <button class="btn primary" id="btn-run" type="button">推演单场（带动画）</button>
+          <button class="btn" id="btn-mc" type="button">蒙特卡洛批量推演</button>
+          <button class="btn" id="btn-bench" type="button">对比基线</button>
+          <button class="btn" id="btn-train" type="button">自博弈调参</button>
+          <div class="progress" id="progress" hidden><div class="bar" id="progress-bar"></div><span id="progress-label"></span></div>
+        </div>
+      </section>
+
+      <!-- 2. 场地 -->
+      <section class="panel field-panel" aria-labelledby="h-field">
+        <div class="panel-head">
+          <h2 id="h-field">场上推演</h2>
+          <p class="hint" id="field-sub">跑一场就会在这里回放：FUEL 流向、换挡窗口、爬塔</p>
+        </div>
+        <div class="scoreboard">
+          <div class="score red"><span class="tag">红</span><strong id="score-red">0</strong><span class="detail" id="detail-red">FUEL 0 · TOWER 0 · 罚分 0</span></div>
+          <div class="clock">
+            <div class="period" id="period-label">—</div>
+            <div class="timer" id="timer-label">2:40</div>
+            <div class="hub-strip" id="hub-strip"></div>
+          </div>
+          <div class="score blue"><span class="tag">蓝</span><strong id="score-blue">0</strong><span class="detail" id="detail-blue">FUEL 0 · TOWER 0 · 罚分 0</span></div>
+        </div>
+        <canvas id="field" width="900" height="440" aria-label="REBUILT 场地俯视图"></canvas>
+        <div class="transport">
+          <button class="btn small" id="btn-play" type="button">播放</button>
+          <input type="range" id="scrub" min="0" max="0" value="0" step="1" aria-label="回放进度" />
+          <label class="speed">速度
+            <select id="sel-speed">
+              <option value="1">1×</option>
+              <option value="2">2×</option>
+              <option value="4" selected>4×</option>
+              <option value="8">8×</option>
+              <option value="16">16×</option>
+            </select>
+          </label>
+        </div>
+        <div class="period-strip" id="period-strip" aria-label="换挡时间轴"></div>
+        <p class="legend" id="legend"></p>
+      </section>
+
+      <!-- 3. 输出 -->
+      <aside class="panel output" aria-labelledby="h-out">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="insight" type="button">战术结论</button>
+          <button class="tab" data-tab="detail" type="button">数据明细</button>
+          <button class="tab" data-tab="bench" type="button">基线对比</button>
+          <button class="tab" data-tab="train" type="button">训练</button>
+          <button class="tab" data-tab="rules" type="button">规则依据</button>
+        </div>
+
+        <div class="tab-body" id="tab-insight">
+          <div class="cards" id="prob-cards"></div>
+          <h3>得分分布（每 50 分一档）</h3>
+          <canvas class="chart" id="chart-score"></canvas>
+          <h3>RP 达成概率（Table 6-4 / 6-5）</h3>
+          <div id="rp-list" class="rp-list"></div>
+          <h3>AI 制定出的作战方案</h3>
+          <div id="plan-view" class="plan-view"></div>
+          <h3>对手原型判断（贝叶斯后验）</h3>
+          <div id="posterior" class="posterior"></div>
+          <h3>关键战术提示</h3>
+          <ul class="insights" id="insights"></ul>
+        </div>
+
+        <div class="tab-body" id="tab-detail" hidden>
+          <h3>机器人数据</h3>
+          <div class="table-wrap"><table id="robot-table"></table></div>
+          <h3>判罚事件</h3>
+          <ul class="events" id="event-list"></ul>
+          <h3>换挡与 HUB 状态（Table 6-3）</h3>
+          <div class="table-wrap"><table id="hub-table"></table></div>
+        </div>
+
+        <div class="tab-body" id="tab-bench" hidden>
+          <p class="hint">
+            基线是三种「人类手写策略」：随机、只看满仓不看 HUB 状态、以及懂得等 HUB 窗口的最优贪心。AI 要赢的是第三种。
+          </p>
+          <div class="table-wrap"><table id="bench-table"></table></div>
+          <div class="table-wrap"><table id="elo-table"></table></div>
+          <h3>分析模型 vs 真实引擎</h3>
+          <p class="hint" id="agreement"></p>
+          <button class="btn" id="btn-bench-recalc" type="button">本地重跑基线（较慢）</button>
+        </div>
+
+        <div class="tab-body" id="tab-train" hidden>
+          <p class="hint">
+            自博弈进化调参：对策略权重做 (μ+λ) 进化，适应度取平滑化的 RP + 胜率 + 分差。浏览器里预算有限，样本少会过拟合，
+            所以默认出厂权重仍是在完整基线上验证过的那套。
+          </p>
+          <label class="field-label">预算（秒）<input id="inp-train-budget" type="number" value="30" min="5" max="120" step="5" /></label>
+          <button class="btn primary" id="btn-train-run" type="button">开始训练</button>
+          <canvas class="chart" id="chart-train"></canvas>
+          <div class="table-wrap"><table id="weight-table"></table></div>
+          <div id="train-result" class="hint"></div>
+        </div>
+
+        <div class="tab-body" id="tab-rules" hidden>
+          <p class="hint">
+            下表左侧是手册原文出处，右侧是它落到引擎里的哪个函数。引擎自检会强制校验 Table 6-3 与计分恒等式。
+          </p>
+          <div class="table-wrap"><table id="rules-table"></table></div>
+          <h3>手册内部冲突（保持可见）</h3>
+          <div id="conflict-list" class="conflicts"></div>
+          <h3>计分与阈值常量</h3>
+          <div class="table-wrap"><table id="const-table"></table></div>
+        </div>
+      </aside>
+    </main>
+
+    <footer>
+      <span>规则依据：2026 FIRST Robotics Competition Game Manual, REBUILT presented by Haas, Version TU21（166 页）。</span>
+      <span>机器人预设为<strong>示例数据</strong>，不是真实队伍表现；请按自家侦察表替换。</span>
+    </footer>
+
+    <script type="module" src="./js/ui.js"></script>
+  </body>
+</html>

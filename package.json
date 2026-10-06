@@ -1,0 +1,12 @@
+{
+  "name": "xplore-sim",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "REBUILT (2026 FRC) match simulator and tactical planner. Rules transcribed from the 2026 Game Manual TU21.",
+  "scripts": {
+    "serve": "node scripts/serve.mjs",
+    "verify": "node scripts/verify.mjs",
+    "bench": "node scripts/bench.mjs"
+  }
+}
