@@ -63,9 +63,17 @@ const D_NEAR = 150;
 const D_FAR = 265;
 
 function cycleOf(cap, dist, w) {
-  const payload = Math.max(1, Math.min(cap.capacity, cap.intake * w.loadSeconds));
-  const travel = (2 * dist) / Math.max(30, cap.speed) + w.traversalOverhead;
-  const cycle = travel + payload / Math.max(0.2, cap.intake) + payload / Math.max(0.2, cap.shootRate) + w.aimOverhead;
+  // A ROBOT leaves the collection area when it is full. Capping the payload by a collection-time
+  // budget made an 85-FUEL hopper indistinguishable from a 50-FUEL one, which is exactly the
+  // difference the search has to see to pick a plan.
+  const payload = Math.max(1, cap.capacity);
+  // A turret does not drive the last leg to the HUB face and does not pay a separate alignment
+  // stop: it fires on the way in. A full-width Dumper pays both, which is why it carries a bigger
+  // payload to amortise the trip.
+  const turret = cap.mechanism === 'turret';
+  const travel = (2 * (turret ? dist * 0.78 : dist)) / Math.max(30, cap.speed) + w.traversalOverhead;
+  const aim = turret ? w.aimOverhead * 0.3 : w.aimOverhead;
+  const cycle = travel + payload / Math.max(0.2, cap.intake) + payload / Math.max(0.2, cap.shootRate) + aim;
   return { payload, cycle, rate: payload / cycle };
 }
 
@@ -129,7 +137,11 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
       return cycleOf(cap, dist, w).rate;
     });
 
-    // Opponent defenders deny our best ROBOTs first.
+    // Opponent defenders deny our best ROBOTs first, and the suppression now has to REACH the
+    // estimate. This block used to scale `rates` and then throw the array away — the scoring loop
+    // below recomputed each ROBOT's output from cycleOf — so defenceEfficacy was dead code, DEFEND
+    // cost the search nothing, and it parked two ROBOTs on defence in every window it sat out.
+    const rateScale = [1, 1, 1];
     const defenders = oppRoles.filter((r) => r === ROLE.DEFEND).length;
     for (let k = 0; k < defenders; k++) {
       let bestIdx = -1;
@@ -137,7 +149,9 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
       for (let i = 0; i < 3; i++) if (rates[i] > bestRate) { bestRate = rates[i]; bestIdx = i; }
       if (bestIdx < 0) break;
       const skill = oppCaps[bestIdx] ? oppCaps[0].defenseSkill : 0.5;
-      rates[bestIdx] *= 1 / (1 + w.defenseEfficacy * skill);
+      const factor = 1 / (1 + w.defenseEfficacy * skill);
+      rates[bestIdx] *= factor;
+      rateScale[bestIdx] *= factor;
     }
 
     for (let i = 0; i < 3; i++) {
@@ -146,7 +160,7 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
         // A climbing ROBOT stops scoring at climbStart; only pre-climb time counts.
         const before = Math.max(0, ownPlan.climb.startAt - (TIME.matchSec - TIME.endgameSec));
         const c = cycleOf(caps[i], D_FAR, w);
-        const made = hubActive ? (before / c.cycle) * c.payload * caps[i].accuracy : 0;
+        const made = hubActive ? (before / c.cycle) * c.payload * caps[i].accuracy * rateScale[i] : 0;
         fuel += made;
         consume(made);
         const level = ownPlan.climb.levels[i] || 3;
@@ -163,22 +177,32 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
       }
       const c = cycleOf(caps[i], near > 0 ? D_NEAR : D_FAR, w);
       const cycles = sec / c.cycle;
-      const made = cycles * c.payload * caps[i].accuracy;
+      const made = cycles * c.payload * caps[i].accuracy * rateScale[i];
       fuel += made;
       consume(made);
     }
   }
 
-  // Banked burst: an inactive ALLIANCE SHIFT is followed by an active one (Table 6-3), so a
-  // full payload is released almost instantly when the HUB returns.
+  // Banked burst: an inactive ALLIANCE SHIFT is followed by an active one (Table 6-3), so a ROBOT
+  // that spent the inactive SHIFT loading up dumps almost instantly when the HUB returns.
+  //
+  // Both halves of that sentence have to be in the condition. Crediting the bank for SCORE in
+  // `next` alone made DEFEND free during your own inactive window — a SCORE role there produces 0
+  // FUEL anyway (the loop above skips inactive periods), so the search happily parked ROBOTs on
+  // defence and lost the load they should have been gathering. Requiring the ROBOT to have been
+  // collecting in `prev` is what gives sitting out a real alternative. It walks consecutive rows
+  // rather than SHIFT s -> SHIFT s+1 so that SHIFT 4 -> END GAME is covered too: otherwise the
+  // LAST inactive window, which is 25 of the 55 s a losing ALLIANCE sits out, was written off as
+  // worth nothing.
   let banked = 0;
-  for (let s = 0; s < 4; s++) {
-    const prev = ctx.schedule.find((r) => r.period === `SHIFT ${s}`);
-    const next = ctx.schedule.find((r) => r.period === `SHIFT ${s + 1}`);
-    if (prev && next && !prev[side] && next[side]) {
-      for (let i = 0; i < 3; i++) {
-        if (ownPlan.periods[next.period][i] === ROLE.SCORE) banked += caps[i].capacity * caps[i].accuracy * w.bankCredit;
-      }
+  for (let k = 0; k < ctx.schedule.length - 1; k++) {
+    const prev = ctx.schedule[k];
+    const next = ctx.schedule[k + 1];
+    if (prev.period === 'AUTO' || prev[side] || !next[side]) continue;
+    for (let i = 0; i < 3; i++) {
+      const collecting = ownPlan.periods[prev.period][i] === ROLE.SCORE;
+      const readyToDump = ownPlan.periods[next.period][i] === ROLE.SCORE;
+      if (collecting && readyToDump) banked += caps[i].capacity * caps[i].accuracy * w.bankCredit;
     }
   }
   fuel += banked;
@@ -235,16 +259,19 @@ export function roleCandidates(n = 3) {
   const seen = new Set();
   const rec = (arr) => {
     if (arr.length === n) {
-      const counts = { SCORE: 0, DEFEND: 0, CLIMB: 0 };
+      const counts = { SCORE: 0, DEFEND: 0 };
       for (const r of arr) counts[r] += 1;
-      const key = `${counts.SCORE}-${counts.DEFEND}-${counts.CLIMB}`;
+      const key = `${counts.SCORE}-${counts.DEFEND}`;
       if (!seen.has(key)) {
         seen.add(key);
         out.push(arr.slice());
       }
       return;
     }
-    for (const r of [ROLE.SCORE, ROLE.DEFEND, ROLE.CLIMB]) rec([...arr, r]);
+    // Climbing is a MATCH-level ladder (plan.climb), not a per-period role: the engine policy never
+    // reads a CLIMB role, so generating one only halved the useful search space and printed a
+    // "攀爬" cell in a SHIFT where nothing can climb.
+    for (const r of [ROLE.SCORE, ROLE.DEFEND]) rec([...arr, r]);
   };
   rec([]);
   return out;

@@ -7,6 +7,8 @@
   "scripts": {
     "serve": "node scripts/serve.mjs",
     "verify": "node scripts/verify.mjs",
-    "bench": "node scripts/bench.mjs"
+    "bench": "node scripts/bench.mjs",
+    "probe": "node scripts/probe.mjs",
+    "train": "node scripts/train.mjs"
   }
 }

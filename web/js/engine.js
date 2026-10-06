@@ -4,7 +4,7 @@
 // can score a hand-written plan, a naive bot, or the search-based AI without favouring either.
 
 import { TIME, POINTS, FUEL, FIELD, hubActiveTable } from './rules.js';
-import { periodAt } from './model.js';
+import { periodAt, defaultScenario } from './model.js';
 import { makeRng } from './rng.js';
 
 export const INTENT = {
@@ -19,6 +19,13 @@ export const INTENT = {
 
 const other = (a) => (a === 'red' ? 'blue' : 'red');
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// How much of a ROBOT's intake throughput an opponent in contact takes away, at full defence
+// pressure. Defence in this game has to be able to matter: real MATCH scores sit well under an
+// undefended simulation, and the four BUMPS/TRENCHES plus one HUB face make a single defender able
+// to park itself in the way. Kept below the drive-speed and shoot-rate losses because a ROBOT that
+// is merely being shadowed can still sweep FUEL off to the side.
+const INTAKE_DEFENCE_LOSS = 0.45;
 
 // Derived arena geometry (§5), mirrored about the CENTER LINE so both ALLIANCES face identical
 // distances. X runs red ALLIANCE WALL (0) -> blue ALLIANCE WALL (651.2), Y across (0 -> 317.7).
@@ -130,6 +137,10 @@ export function simulateMatch(opts) {
         y: GEO.yc + (slot - 1) * 46,
         vx: 0,
         vy: 0,
+        // Last real heading. A stopped ROBOT keeps facing where it was going, so the intake cone
+        // stays defined while it is parked on a pile of FUEL.
+        hx: side === 'red' ? 1 : -1,
+        hy: 0,
         carrying: 0,
         intent: { mode: INTENT.IDLE },
         // `climb` merges the ROBOT's climb capabilities (l1/l2/l3, timeSec, attachTimeSec) with
@@ -143,6 +154,7 @@ export function simulateMatch(opts) {
         g408Instances: 0,
         g420Cooldown: 0,
         shootClock: 0,
+        aimClock: 0,
         depositClock: 0,
         distance: 0,
         stat: {
@@ -200,6 +212,12 @@ export function simulateMatch(opts) {
   let period = 'AUTO';
   const blockState = { red: 0, blue: 0 };
   const feedAcc = { red: 0, blue: 0 };
+  // §5.4: a HUB returns FUEL to the NEUTRAL ZONE through four exits, and that return path has a
+  // finite throughput. It is what sets the tempo of the whole MATCH: the FIELD only holds 504 FUEL
+  // (§6.3.4), so a HUB that recirculates instantly lets an ALLIANCE re-score the same FUEL over and
+  // over with nothing to stop it. See hubExitRate in defaultScenario() for the calibration.
+  const hubExitRate = sc.hubExitRate ?? defaultScenario().hubExitRate;
+  const exitAcc = { red: 0, blue: 0 };
 
   const log = (t, kind, data) => {
     if (events.length < 3000) events.push({ t: +t.toFixed(2), kind, ...data });
@@ -298,7 +316,7 @@ export function simulateMatch(opts) {
       (grid[k] || (grid[k] = [])).push(i);
     }
   }
-  function takeFuelNear(rb, radius, rate, dt) {
+  function takeFuelNear(rb, radius, rate, dt, cosCone = -1) {
     // Accumulate fractionally so intakeRate is a true FUEL/s limit rather than 1 FUEL/tick.
     rb.intakeAcc = Math.min(2, (rb.intakeAcc || 0) + rate * dt);
     const budget = Math.floor(rb.intakeAcc);
@@ -317,6 +335,16 @@ export function simulateMatch(opts) {
           const dx = fx[i] - rb.x;
           const dy = fy[i] - rb.y;
           if (dx * dx + dy * dy > radius * radius) continue;
+          // An intake is a mouth at the front of the ROBOT, not a radial vacuum: FUEL has to pass
+          // into the opening. cosCone is the cosine of the forward half-angle, so cosCone <= 0
+          // keeps the old omnidirectional behaviour.
+          if (cosCone > -1) {
+            const d = Math.sqrt(dx * dx + dy * dy);
+            // A roller intake is only about a ROBOT-width of mouth, so FUEL already in contact with
+            // it is ingested whatever the ROBOT is facing. Without this a ROBOT that parks exactly
+            // on a FUEL reads a zero-length bearing and can never pick it up again.
+            if (d > 12 && (dx * rb.hx + dy * rb.hy) / d < cosCone) continue;
+          }
           fstate[i] = 3;
           fholder[i] = rb.idx;
           rb.carrying += 1;
@@ -345,7 +373,10 @@ export function simulateMatch(opts) {
     const hub = GEO[rb.alliance].hub;
     const dist = Math.hypot(rb.x - hub.x, rb.y - hub.y);
     let acc = rb.shootAccuracy - rb.accuracyFalloff * Math.max(0, dist - rb.refShootDistanceIn);
-    acc *= 1 - 0.3 * rb.defensePressure;
+    // Defence suppresses a cycle far more than drive speed alone suggests: a bumper in your face
+    // slows you down AND costs you shots, which is why real MATCH scores land well under an
+    // undefended simulation.
+    acc *= 1 - 0.5 * rb.defensePressure;
     acc = clamp(acc, 0.08, 0.99);
     for (let i = 0; i < total; i++) {
       if (fstate[i] === 3 && fholder[i] === rb.idx) {
@@ -599,8 +630,10 @@ export function simulateMatch(opts) {
           }
           break;
         case INTENT.SCORE:
-          tx = g.shoot.x;
-          ty = g.shoot.y;
+          // A turret may nominate its own firing point inside the ALLIANCE ZONE; a full-width
+          // shooter is driven to the HUB face because that is the only place it can shoot from.
+          tx = intent.target ? intent.target.x : g.shoot.x;
+          ty = intent.target ? intent.target.y : g.shoot.y;
           break;
         case INTENT.DEFEND: {
           const tgt = robots[intent.targetRobot];
@@ -630,7 +663,7 @@ export function simulateMatch(opts) {
       const dx = wp.x - rb.x;
       const dy = wp.y - rb.y;
       const dist = Math.hypot(dx, dy) || 1;
-      let maxSpeed = rb.driveSpeedIps * (rb.health === 0 ? 0 : rb.health) * (1 - 0.55 * rb.defensePressure);
+      let maxSpeed = rb.driveSpeedIps * (rb.health === 0 ? 0 : rb.health) * (1 - 0.7 * rb.defensePressure);
       if (intent.mode === INTENT.CLIMB && dist < 30) maxSpeed *= 0.45;
       if (!rb.canTrench && Math.abs(rb.x - g.band[0]) < FIELD.bump.depthIn + 10) maxSpeed *= 0.72;
       // Closed-loop position control: ROBOTS decelerate into a waypoint instead of overshooting it
@@ -682,12 +715,33 @@ export function simulateMatch(opts) {
         }
       }
 
+      // Heading for the directional intake. A ROBOT that is actually driving faces its velocity;
+      // once it settles onto a pile it keeps the heading it arrived with, which is exactly where a
+      // front-mounted intake is pointing.
+      {
+        const sp = Math.hypot(rb.vx, rb.vy);
+        if (sp > 18) {
+          rb.hx = rb.vx / sp;
+          rb.hy = rb.vy / sp;
+        }
+      }
+
       // ---- actions ----
       switch (intent.mode) {
         case INTENT.COLLECT:
         case INTENT.STOCKPILE: {
           rb.stat.collectTicks += 1;
-          if (takeFuelNear(rb, 24, rb.intakeRate * (rb.health || 0), tick) > 0) rb.stat.intakeTicks += 1;
+          // A roller intake cannot swallow FUEL at a full sprint — teams slow down to sweep — so the
+          // usable rate falls off with ground speed instead of being the same at a crawl and at
+          // 14 ft/s. This is the single biggest gap between a 1-D kinematic cycle and a real one.
+          const sweep = 1 - 0.6 * clamp((Math.hypot(rb.vx, rb.vy) - 55) / 90, 0, 1);
+          // Defence has to touch the intake as well, or it accomplishes nothing: an opponent with
+          // its BUMPERS in your intake mouth stops you sweeping FUEL at all. Drive speed, shoot rate
+          // and accuracy are already scaled by defencePressure; leaving intake untouched made
+          // defending strictly self-harming (measure: 1 defender cost 200 own points and did not
+          // reduce the opponent's score at all).
+          const press = 1 - INTAKE_DEFENCE_LOSS * rb.defensePressure;
+          if (takeFuelNear(rb, 14, rb.intakeRate * (rb.health || 0) * sweep * press, tick, 0.6) > 0) rb.stat.intakeTicks += 1;
           // G408: FUEL released by a HUB may not be caught or redirected beyond MOMENTARY CONTROL.
           let nearExit = false;
           for (const side of ['red', 'blue']) {
@@ -710,17 +764,27 @@ export function simulateMatch(opts) {
         }
         case INTENT.SCORE: {
           const inZone = rb.x >= g.allianceZone[0] && rb.x <= g.allianceZone[1];
-          const atSpot = Math.hypot(rb.x - g.shoot.x, rb.y - g.shoot.y) < 46;
           // G407: FUEL may only be launched at your own HUB with BUMPERS at least partly inside
-          // your ALLIANCE ZONE, so the engine only produces shots from inside the zone.
-          if (inZone && atSpot && rb.carrying > 0) {
+          // your ALLIANCE ZONE, so the engine only produces shots from inside the zone. On top of
+          // that, a full-width shooter has to be lined up at the HUB face, while a turret tracks
+          // the HUB and can fire from anywhere in the zone — that is the whole point of the turret.
+          const aligned = rb.mechanism === 'turret' || Math.hypot(rb.x - g.shoot.x, rb.y - g.shoot.y) < 46;
+          // Aiming cost a kinematic cycle model ignores: a full-width shooter has to line up and
+          // settle at the HUB face before its load goes out, while a turret only has to slew.
+          const aimSec = rb.mechanism === 'turret' ? 0.15 : 0.7;
+          if (inZone && aligned && rb.carrying > 0) {
+            rb.aimClock = (rb.aimClock || 0) + tick;
+            if (rb.aimClock < aimSec) break;
             rb.shootClock += tick;
             const interval = 1 / Math.max(0.4, rb.shootRate * (rb.health || 0) * (1 - 0.5 * rb.defensePressure));
             while (rb.shootClock >= interval && rb.carrying > 0) {
               rb.shootClock -= interval;
               releaseShot(rb);
             }
-          } else rb.shootClock = 0;
+          } else {
+            rb.shootClock = 0;
+            rb.aimClock = 0;
+          }
           break;
         }
         case INTENT.FEED: {
@@ -779,7 +843,7 @@ export function simulateMatch(opts) {
             intent.mode !== INTENT.DEFEND &&
             intent.mode !== INTENT.CLIMB
           ) {
-            takeFuelNear(rb, 16, rb.intakeRate * 0.35, tick);
+            takeFuelNear(rb, 14, rb.intakeRate * 0.35, tick, 0.5);
           }
       }
       rb.stat.activeSec += tick;
@@ -813,10 +877,15 @@ export function simulateMatch(opts) {
       if (ftimer[i] <= 0) resolveFlight(i, t);
     }
     // ---- HUB processing: scored FUEL reappears in the NEUTRAL ZONE (§5.4) ----
+    for (const side of ['red', 'blue']) exitAcc[side] = Math.min(2, exitAcc[side] + hubExitRate * tick);
     for (const i of processing) {
       ftimer[i] -= tick;
       if (ftimer[i] > 0) continue;
       const target = fhub[i] === 1 ? 'red' : 'blue';
+      // The exit rate, not the point award, is the real ceiling on a MATCH: FUEL that cannot get
+      // back onto the FIELD yet stays inside the HUB, which is what starves a cycle late in a game.
+      if (exitAcc[target] < 1) continue;
+      exitAcc[target] -= 1;
       const hub = GEO[target].hub;
       const dir = target === 'red' ? 1 : -1;
       fstate[i] = 0;

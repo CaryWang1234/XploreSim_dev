@@ -31,52 +31,97 @@ import {
 import { ARCHETYPES } from './model.js';
 
 // ---------------------------------------------------------------------------------------------
-// Tunable weights. league.js evolves this vector by self-play; the defaults below are the
-// starting point and are already playable on their own.
+// Tunable weights. league.js evolves this vector by self-play inside the browser, and
+// scripts/train.mjs does the same offline without a budget cap, but the values below are not a
+// bare starting point: they are the output of a run that was gated on a holdout seed family, and
+// were only promoted because they beat the previous defaults there and on four further
+// independent seed families (~85% head-to-head on identical ROBOTs, ~+40 MATCH points).
 // ---------------------------------------------------------------------------------------------
 export const DEFAULT_WEIGHTS = {
   // fast-model shape (also evolved, because they steer which strategy looks best)
-  loadSeconds: 6.0,
   traversalOverhead: 1.6,
-  aimOverhead: 1.1,
-  defenseEfficacy: 0.55,
-  bankCredit: 0.35,
+  aimOverhead: 0.8561,
+  // Measured against the engine, not tuned by feel: a ROBOT sent to shadow an opponent costs its own
+  // ALLIANCE about 180 points (it stops cycling) and takes only about 20 off the victim, so the
+  // model's per-defender suppression has to be small or the search defends because the model told it
+  // to. 0.06 reproduces that ~20-point effect at the presets' defenceSkill.
+  defenseEfficacy: 0.06,
+  bankCredit: 0.2434,
   // FUEL cluster targeting
-  clusterDensity: 1.0,
-  clusterNear: 0.0022,
-  clusterHubExitPenalty: 1.6,
-  clusterOwnHalfBias: 0.3,
-  clusterStickiness: 0.55,
+  clusterDensity: 1.0419,
+  clusterNear: 0.0005,
+  clusterHubExitPenalty: 1.6015,
+  clusterOwnHalfBias: 0.2575,
+  clusterStickiness: 0.7216,
   targetRefreshSec: 0.6,
-  // tempo
-  dumpThreshold: 0.85,
-  dumpBeforeIdleFrac: 0.3,
-  dumpBeforeIdleSec: 3.0,
-  idleStockpileFrac: 0.92,
+  // tempo. dumpThreshold was pinned at 1.0 (the old upper bound), which meant the AI would only ever
+  // score a completely full hopper: it would spend a whole SHIFT filling and then miss the window,
+  // travel more than the greedy baseline and score less. The bound now reaches down to 0.15 so the
+  // search can trade load size against window time instead of sitting on a boundary.
+  dumpThreshold: 0.5,
+  dumpBeforeIdleFrac: 0.2606,
+  dumpBeforeIdleSec: 3.2918,
+  // While our own HUB is inactive the opponent's is the active one (Table 6-3), so a ROBOT that is
+  // this full cannot bank any more and goes to deny their window instead of waiting at our HUB.
+  pressWhenIdleFrac: 0.8083,
   // defence
-  defendCarryWeight: 0.6,
+  defendCarryWeight: 0.4407,
   defendThreatWeight: 0.5,
-  defendMinRemainingSec: 4,
-  defendPerRobot: 1,
-  // TOWER
-  climbTraversalFocus: 1.0,
-  climbReserveSec: 17,
-  climbLevelBias: 0.15,
-  // AUTO
-  autoFuelTarget: 1.0,
-  autoClimbCount: 1,
-  // risk
-  pinRiskWeight: 0.5,
-  g408RiskWeight: 1.0,
+  // TOWER: how much a TRAVERSAL RP is worth when choosing the END GAME ladder
+  climbTraversalFocus: 0.7802,
+  // AUTO posture is a per-MATCH plan parameter, not a weight: the planner chooses it by search
+  // (searchAuto), so it is deliberately absent from this vector.
   // search
-  mctsExploration: 0.75,
+  mctsExploration: 0.8776,
   modelEfficiency: 0.85, // scales the analytic model to the engine's observed output
 };
 
-export const WEIGHT_KEYS = Object.keys(DEFAULT_WEIGHTS);
+// The evolved vector. modelEfficiency is excluded: it is not a strategy choice but a measurement,
+// fitted at load by calibrateModel() against real engine MATCHES, so searching it would just spend
+// a dimension on a value the runtime overwrites.
+export const WEIGHT_KEYS = Object.keys(DEFAULT_WEIGHTS).filter((k) => k !== 'modelEfficiency');
+
+// Every weight has a domain outside which it stops meaning anything. The evolution has to stay
+// inside it, or it can "improve" by pushing a threshold out of reach — e.g. pressWhenIdleFrac
+// above 1 is a carrying fraction that can never be met, which silently deletes the behaviour
+// instead of tuning it.
+export const WEIGHT_BOUNDS = {
+  traversalOverhead: [0.5, 4],
+  aimOverhead: [0.3, 3],
+  // Measured in the engine: one ROBOT sent to shadow an opponent costs its own ALLIANCE about 180
+  // points and takes about 20 off the victim, so the search has to be free to conclude "defending
+  // does not pay here" instead of being pinned to a positive value it cannot argue with.
+  defenseEfficacy: [0, 0.9],
+  bankCredit: [0, 0.8],
+  clusterDensity: [0.4, 2.0],
+  clusterNear: [0.0005, 0.005],
+  clusterHubExitPenalty: [0.5, 4],
+  clusterOwnHalfBias: [0, 1.2],
+  clusterStickiness: [0.1, 1.2],
+  targetRefreshSec: [0.2, 2.0],
+  dumpThreshold: [0.15, 1.0],
+  dumpBeforeIdleFrac: [0.1, 0.8],
+  dumpBeforeIdleSec: [1, 8],
+  pressWhenIdleFrac: [0.5, 1.0],
+  defendCarryWeight: [0.1, 1.5],
+  defendThreatWeight: [0.1, 1.5],
+  climbTraversalFocus: [0, 3],
+  mctsExploration: [0.2, 1.6],
+};
+
+export function clampWeights(w) {
+  const out = { ...w };
+  for (const k of WEIGHT_KEYS) {
+    const b = WEIGHT_BOUNDS[k];
+    if (!b) continue;
+    const v = Number(out[k]);
+    out[k] = Number.isFinite(v) ? Math.max(b[0], Math.min(b[1], v)) : DEFAULT_WEIGHTS[k];
+  }
+  return out;
+}
 
 export function cloneWeights(w) {
-  return { ...DEFAULT_WEIGHTS, ...w };
+  return clampWeights({ ...DEFAULT_WEIGHTS, ...w });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -97,6 +142,7 @@ export function scoutCaps(profiles, rng, noise = 0.12) {
       defensePower: Math.min(1, jitter(Math.max(0.1, p.defensePower), 0.2)),
       maxClimb: max,
       climb: { max, timeSec: jitter(p.climb.timeSec, 2), attachTimeSec: jitter(p.climb.attachTimeSec, 1) },
+      mechanism: p.mechanism,
       canTrench: p.heightIn <= FIELD.trench.clearHeightIn,
       reliability: p.reliability,
       team: p.team,
@@ -134,17 +180,20 @@ export class OpponentModel {
   }
 
   // Gaussian likelihood over the feature vector; each new observation nudges the posterior.
+  // Dimensions absent from `feat` are ignored rather than treated as zero, so an early-match
+  // observation (no AUTO result yet) does not count as evidence of a low AUTO output.
   update(feat, weight = 1) {
-    const keys = Object.keys(ARCH_FEATURES);
     const sd = { score: 0.22, defend: 0.2, climb: 0.2, climbLvl: 0.35, autoFuel: 0.3 };
-    for (const k of keys) {
+    const dims = Object.keys(sd).filter((f) => feat[f] !== undefined);
+    if (!dims.length) return;
+    for (const k of Object.keys(ARCH_FEATURES)) {
       const c = ARCH_FEATURES[k];
       let ll = 0;
-      for (const f of Object.keys(sd)) {
+      for (const f of dims) {
         const d = (feat[f] - c[f]) / sd[f];
         ll += -0.5 * d * d;
       }
-      this.counts[k] += Math.exp(ll / Object.keys(sd).length) * weight;
+      this.counts[k] += Math.exp(ll / dims.length) * weight;
     }
     this.observed = { ...this.observed, ...feat };
     this.samples += 1;
@@ -178,10 +227,11 @@ export function planFromArchetype(arch, sched, rng) {
       const r = rng();
       let acc = 0;
       let chosen = ROLE.SCORE;
+      // A CLIMB role would be inert (see roleCandidates), so an archetype's climb appetite is
+      // expressed through climbPriority below rather than through a role slot.
       for (const [k, v] of [
-        [ROLE.SCORE, bias.SCORE],
+        [ROLE.SCORE, bias.SCORE + bias.CLIMB],
         [ROLE.DEFEND, bias.DEFEND],
-        [ROLE.CLIMB, bias.CLIMB],
       ]) {
         acc += v;
         if (r <= acc) {
@@ -266,7 +316,9 @@ export class MacroPlanner {
       if (node.children && nextIdx >= 0) {
         let bestCU = -Infinity;
         for (const c of node.children) {
-          const u = c.visits === 0 ? Infinity : c.value + this.w.mctsExploration * Math.sqrt(Math.log(node.visits + 1) / c.visits);
+          // UCB1 needs the MEAN value; `c.value` is a running sum, so using it directly would make
+          // every extra visit look like extra quality and starve the siblings.
+          const u = c.visits === 0 ? Infinity : c.value / c.visits + this.w.mctsExploration * Math.sqrt(Math.log(node.visits + 1) / c.visits);
           if (u > bestCU) {
             bestCU = u;
             child = c;

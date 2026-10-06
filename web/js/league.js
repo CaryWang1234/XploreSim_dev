@@ -2,12 +2,12 @@
 // worker to train the micro-policy weights by self-play, with Elo against named baselines so the
 // claim "the AI is strong" is backed by a number rather than an assertion.
 
-import { TIME, POINTS } from './rules.js';
+import { TIME, POINTS, FIELD } from './rules.js';
 import { GEO, INTENT, simulateMatch } from './engine.js';
 import { defaultScenario, makeAlliance, SAMPLES, periodAt } from './model.js';
 import { hubActiveTable } from './rules.js';
 import { makeContext, evaluateMatch, emptyPlan, withClimb, withRoles, ROLE } from './fastsim.js';
-import { DEFAULT_WEIGHTS, WEIGHT_KEYS, cloneWeights } from './ai.js';
+import { DEFAULT_WEIGHTS, WEIGHT_KEYS, cloneWeights, clampWeights } from './ai.js';
 import { createAI } from './policy.js';
 
 export function makeRng(seed) {
@@ -79,8 +79,16 @@ function shootAlwaysPolicy(side) {
   };
 }
 
-// 3. greedy: HUB-window aware (never wastes FUEL), nearest-FUEL cycling, climbs L3 at the end with
-//    every ROBOT. This is the "competent human plan" yardstick the AI has to beat.
+// 3. greedy: HUB-window aware (never wastes FUEL), nearest-FUEL cycling, climbs its best level at the
+//    end with every ROBOT. This is the "competent human plan" yardstick the AI has to beat, so it
+//    also knows the one thing a competent human knows: do not loiter at a HUB exit, because catching
+//    FUEL there is a G408 foul and the FUEL that comes out of a HUB lands right next to it.
+const HUB_EXITS = ['red', 'blue'].map((s) => ({
+  x: GEO[s].hub.x + (s === 'red' ? FIELD.hub.sizeIn / 2 : -FIELD.hub.sizeIn / 2),
+  y: GEO[s].hub.y,
+}));
+const forbiddenFuelSpot = (x, y) => HUB_EXITS.some((e) => Math.hypot(x - e.x, y - e.y) < GEO.hubExitZoneRadiusIn + 10);
+
 export function greedyPolicy(side) {
   return {
     reset() {},
@@ -98,6 +106,7 @@ export function greedyPolicy(side) {
       let bestD = Infinity;
       for (let i = 0; i < obs.fuel.total; i += 2) {
         if (obs.fuel.state[i] !== 0) continue;
+        if (forbiddenFuelSpot(obs.fuel.x[i], obs.fuel.y[i])) continue;
         const d = (obs.fuel.x[i] - rb.x) ** 2 + (obs.fuel.y[i] - rb.y) ** 2;
         if (d < bestD) {
           bestD = d;
@@ -162,6 +171,7 @@ export function capOf(rb) {
     capacity: rb.capacity,
     shootRate: rb.shootRate,
     accuracy: rb.shootAccuracy,
+    mechanism: rb.mechanism,
     defenseSkill: rb.defenseSkill,
     defensePower: rb.defensePower,
     maxClimb: rb.derived.maxClimbLevel,
@@ -362,7 +372,7 @@ export function evolve({
         const scale = Math.max(0.05, Math.abs(best[key]) || 1);
         cand[key] = best[key] + (rnd() < 0.5 ? -1 : 1) * sigma * scale * (0.4 + rnd());
       }
-      trials.push(cand);
+      trials.push(clampWeights(cand));
     }
     let improved = false;
     for (const cand of trials) {

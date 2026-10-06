@@ -107,6 +107,7 @@
             <div class="period" id="period-label">—</div>
             <div class="timer" id="timer-label">2:40</div>
             <div class="hub-strip" id="hub-strip"></div>
+            <div class="margin" id="margin-label">—</div>
           </div>
           <div class="score blue"><span class="tag">蓝</span><strong id="score-blue">0</strong><span class="detail" id="detail-blue">FUEL 0 · TOWER 0 · 罚分 0</span></div>
         </div>
@@ -125,6 +126,7 @@
           </label>
         </div>
         <div class="period-strip" id="period-strip" aria-label="换挡时间轴"></div>
+        <p class="auto-note" id="auto-note"></p>
         <p class="legend" id="legend"></p>
       </section>
 
@@ -138,7 +140,11 @@
           <button class="tab" data-tab="rules" type="button">规则依据</button>
         </div>
 
-        <div class="tab-body" id="tab-insight">
+        <div class="tab-body is-empty" id="tab-insight">
+          <div class="empty" id="insight-empty">
+            <strong>还没有推演结果</strong>
+            <span>点左边的「推演单场（带动画）」看一场回放，或点「蒙特卡洛批量推演」拿概率分布。</span>
+          </div>
           <div class="cards" id="prob-cards"></div>
           <h3>得分分布（每 50 分一档）</h3>
           <canvas class="chart" id="chart-score"></canvas>
@@ -193,13 +199,24 @@
           <div id="conflict-list" class="conflicts"></div>
           <h3>计分与阈值常量</h3>
           <div class="table-wrap"><table id="const-table"></table></div>
+          <h3>对标真实赛场（校准基准）</h3>
+          <p class="hint">
+            仿真出来的分数量级必须和赛场对得上，否则推演出的战术没有意义。下表是 2026 Einstein Finals（事件
+            <span class="mono">2026cmptx</span>）的真实比分，取自 The Blue Alliance 比赛页面。引擎里的机制摩擦就是按这组数字校准的：进料口是<strong>有向</strong>的（±53° 锥角，不是全向真空吸球）、滚筒吸球速率随车速衰减、Dumper 必须停顿瞄准、HUB 出料口吞吐限定为 4.0 颗/秒。
+          </p>
+          <p class="hint">
+            原先引擎让机器人做全向真空吸球、且 HUB 无限快地把球吐回场内，单联盟能打到 1150 分以上，是真实值的两倍。改完之后，双方都不防守的精英对局落在 <strong>≈690</strong>，与真实 Einstein 平均 627 同一量级。<strong>仍存在的偏差：</strong>引擎仍比真实略高（≈10%），且为了压住节奏，场上散落的 FUEL 比真实场地偏少；参照机型的参数本身也仍是估值。
+          </p>
+          <div class="table-wrap"><table id="calib-table"></table></div>
         </div>
       </aside>
     </main>
 
     <footer>
       <span>规则依据：2026 FIRST Robotics Competition Game Manual, REBUILT presented by Haas, Version TU21（166 页）。</span>
-      <span>机器人预设为<strong>示例数据</strong>，不是真实队伍表现；请按自家侦察表替换。</span>
+      <span>
+        「参照机型」每台都标了<strong>来源链接</strong>：原文能读到的机构类型、爬塔级别、料仓容量按原文填（如 4414 的 85+ 球料仓、1690 的 13 BPS、1678 爬 L1），读不到的才估。数值仍多为<strong>估计值</strong>，非实测，也不代表这些队伍的真实表现；要用来做决策，请填自家侦察数据。
+      </span>
     </footer>
 
     <script type="module" src="./js/ui.js"></script>

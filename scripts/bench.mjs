@@ -2,7 +2,7 @@
 // Also checks how well the analytic search model tracks the real engine.
 
 import { DEFAULT_WEIGHTS } from '../web/js/ai.js';
-import { evaluateVsBaseline, headToHead, BASELINE_KINDS, Elo, fastModelVsEngine } from '../web/js/league.js';
+import { evaluateVsBaseline, headToHead, BASELINE_KINDS, Elo, fastModelVsEngine, calibrateModel } from '../web/js/league.js';
 
 const MATCHES = Number(process.env.MATCHES || 12);
 const ITER = Number(process.env.ITER || 160);
@@ -39,11 +39,19 @@ const hh = headToHead({ kindA: 'ai', kindB: 'greedy', A: DEFAULT_WEIGHTS, B: nul
 console.log(`  AI ${hh.aWins} - ${hh.bWins} greedy (draws ${hh.draws}), avg score ${hh.aScore.toFixed(1)} vs ${hh.bScore.toFixed(1)}`);
 
 console.log('\n--- analytic model vs engine (greedy both sides) ---');
-const agree = fastModelVsEngine({ samples: 8 });
+const raw = fastModelVsEngine({ samples: 8 });
 console.log(
-  `  engine RED ${agree.engineRed.toFixed(1)} / BLUE ${agree.engineBlue.toFixed(1)}  ` +
-    `model RED ${agree.modelRed.toFixed(1)} / BLUE ${agree.modelBlue.toFixed(1)}  ` +
-    `err RED ${agree.errRedPct.toFixed(1)}% / BLUE ${agree.errBluePct.toFixed(1)}%`,
+  `  raw (before calibration): engine RED ${raw.engineRed.toFixed(1)} / BLUE ${raw.engineBlue.toFixed(1)}  ` +
+    `model RED ${raw.modelRed.toFixed(1)} / BLUE ${raw.modelBlue.toFixed(1)}  ` +
+    `err RED ${raw.errRedPct.toFixed(1)}% / BLUE ${raw.errBluePct.toFixed(1)}%`,
+);
+// The search never runs on the raw model: the UI fits this ratio at load, so the calibrated
+// residual is the number that bounds the planner's assumption.
+const cal = calibrateModel({ samples: 6 });
+console.log(
+  `  calibrated (x${cal.efficiency.toFixed(3)}): engine RED ${cal.engineRed.toFixed(1)} / BLUE ${cal.engineBlue.toFixed(1)}  ` +
+    `model RED ${cal.calibratedRed.toFixed(1)} / BLUE ${cal.calibratedBlue.toFixed(1)}  ` +
+    `err RED ${cal.errRedPct.toFixed(1)}% / BLUE ${cal.errBluePct.toFixed(1)}%`,
 );
 
 console.log(`\ntotal ${((Date.now() - t0) / 1000).toFixed(1)} s`);

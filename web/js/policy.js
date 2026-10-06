@@ -22,6 +22,7 @@ import { DEFAULT_WEIGHTS, MacroPlanner, OpponentModel, scoutCaps } from './ai.js
 
 const CELL_X = 48;
 const CELL_Y = 48;
+const OBSERVE_EVERY_SEC = 10;
 
 export function createAI(opts) {
   const {
@@ -56,6 +57,7 @@ export function createAI(opts) {
   const scoreCommit = new Map();
   let claims = {};
   let lastDecisionT = -1;
+  let lastObserveT = -Infinity;
   const oppHistory = { fuel: 0, tower: 0, lastFuel: 0, lastT: 0 };
   let mctsStats = { rollouts: 0, calls: 0, nodes: 0 };
 
@@ -101,13 +103,15 @@ export function createAI(opts) {
     const c = capSummary(obs, oppSide);
     const ourScore = obs.score[side].fuel + obs.score[side].towerAuto + obs.score[side].towerTeleop;
     const oppScore = obs.score[oppSide].fuel + obs.score[oppSide].towerAuto + obs.score[oppSide].towerTeleop;
-    oppModel.update({
+    const feat = {
       score: oppScore + ourScore > 4 ? oppScore / (oppScore + ourScore) : 0.6,
       defend: defenseShare(obs),
       climb: c.attach,
       climbLvl: c.levels,
-      autoFuel: Math.min(1, obs.autoFuel[oppSide] / 40),
-    });
+    };
+    // AUTO FUEL only exists once AUTO has closed, so it is not evidence during AUTO itself.
+    if (obs.t >= TIME.autoSec) feat.autoFuel = Math.min(1, obs.autoFuel[oppSide] / 40);
+    oppModel.update(feat);
   }
 
   // ---- defensive target selection: deny their highest-value scorer, skip TOWER-adjacent
@@ -208,7 +212,7 @@ export function createAI(opts) {
       const dist = Math.hypot(x - rb.x, y - rb.y);
       let v = cycleRate(n, dist) * weights.clusterDensity - dist * weights.clusterNear * 0.1;
       v -= penaltyAt(x, y);
-      const distToHome = side === 'red' ? x : GEO.L - x;
+      const distToHome = Math.abs(x - GEO[side].hub.x);
       v -= (distToHome / GEO.L) * weights.clusterOwnHalfBias;
       if (key >= 0 && key === stickyKey) v += weights.clusterStickiness;
       if (!best || v > best.v) best = { v, x, y, key, n };
@@ -242,6 +246,65 @@ export function createAI(opts) {
     if (best.key >= 0) claims[best.key] = true;
     targets.set(rb.slot, { key: best.key, t: obs.t });
     return { x: best.x, y: best.y, weight: best.n };
+  }
+
+  // ---- firing point selection. A full-width shooter can only score from the HUB face, so it gets
+  // no choice. A turret tracks the HUB and may fire from anywhere inside its ALLIANCE ZONE (G407),
+  // which is also its answer to defence: if an opponent is already in its face it moves to the spot
+  // in the zone that is furthest from them instead of contesting the one place a defender waits.
+  function opponentClearance(x, y, obs) {
+    let near = Infinity;
+    for (const o of obs.robots) {
+      if (o.alliance !== oppSide || o.disabled) continue;
+      const d = Math.hypot(o.x - x, o.y - y);
+      if (d < near) near = d;
+    }
+    return near;
+  }
+
+  function turretFireSpot(rb, obs) {
+    const g = GEO[side];
+    const baseX = g.shoot.x;
+    const baseY = g.shoot.y;
+    const back = side === 'red' ? -1 : 1; // deeper into our own zone, away from the HUB face
+    const cands = [
+      { x: baseX, y: baseY },
+      { x: baseX, y: baseY - 55 },
+      { x: baseX, y: baseY + 55 },
+      { x: baseX + back * 35, y: baseY },
+      { x: baseX + back * 35, y: baseY - 55 },
+      { x: baseX + back * 35, y: baseY + 55 },
+      { x: baseX + back * 70, y: baseY },
+    ];
+    let best = { x: baseX, y: baseY };
+    let bestClearance = -Infinity;
+    for (const c of cands) {
+      if (c.x < g.allianceZone[0] + 12 || c.x > g.allianceZone[1] - 12) continue;
+      if (c.y < 24 || c.y > GEO.W - 24) continue;
+      const near = opponentClearance(c.x, c.y, obs);
+      if (near > bestClearance) {
+        bestClearance = near;
+        best = { x: c.x, y: c.y };
+      }
+    }
+    return best;
+  }
+
+  // Distance below which an opponent is close enough to actually be in the way of a shot.
+  const DEFENDED_CLEARANCE = 40;
+
+  function scoreIntent(rb, obs) {
+    if (rb.mechanism !== 'turret') return { mode: INTENT.SCORE };
+    const g = GEO[side];
+    const inZone = rb.x >= g.allianceZone[0] && rb.x <= g.allianceZone[1];
+    // The whole point of a turret is that it does not need the HUB face. Making it drive to the
+    // common shoot point anyway costs a full extra leg per cycle and throws away the mechanism's
+    // advantage, so it fires from where it stands whenever that is legal (G407: BUMPERS inside the
+    // ALLIANCE ZONE) and clear. It only relocates when it is outside the zone or actually defended.
+    if (inZone && opponentClearance(rb.x, rb.y, obs) > DEFENDED_CLEARANCE) {
+      return { mode: INTENT.SCORE, target: { x: rb.x, y: rb.y } };
+    }
+    return { mode: INTENT.SCORE, target: turretFireSpot(rb, obs) };
   }
 
   function secsUntilHubOff(obs) {
@@ -324,18 +387,18 @@ export function createAI(opts) {
     if (idx < 0) return;
     if (period === 'END GAME') {
       const r = planner.searchEndgame(side, schedule, basePlan, idx, 26, (rng() * 1e6) | 0, towerL1TeleopAllowed);
-      climbOpt = r.climb;
-      basePlan = withClimb(withRoles(basePlan, 'END GAME', currentPlan.periods['END GAME']), climbOpt);
-      // Assign TOWER lanes to the best climbers; one ROBOT per lane keeps partners from
-      // supporting each other (G414).
-      const order = obs.robots
-        .filter((r) => r.alliance === side)
-        .slice()
+      // The search prices a ladder, not whether any ROBOT can actually climb it. On this season's
+      // top-tier ROBOTs most cannot, so cap the ladder at the real number of climbers and drop the
+      // rest of the plan; otherwise three non-climbers would all leave the FUEL cycle for nothing.
+      const climbers = obs.robots
+        .filter((x) => x.alliance === side && x.derived.maxClimbLevel >= 1)
         .sort((a, b) => b.derived.maxClimbLevel - a.derived.maxClimbLevel || a.climb.timeSec - b.climb.timeSec);
+      const count = Math.min(r.climb.count, climbers.length);
+      climbOpt = { count, levels: count ? r.climb.levels.slice(0, count) : [], startAt: r.climb.startAt };
+      basePlan = withClimb(withRoles(basePlan, 'END GAME', currentPlan.periods['END GAME']), climbOpt);
+      // One ROBOT per lane: partners on the same UPRIGHT would be supporting each other (G414).
       climbLanes = {};
-      for (let k = 0; k < Math.min(climbOpt.count, order.length); k++) {
-        climbLanes[order[k].slot] = climbOpt.levels[k] || 3;
-      }
+      for (let k = 0; k < count; k++) climbLanes[climbers[k].slot] = climbOpt.levels[k] || 3;
       mctsStats.calls += 1;
       mctsStats.rollouts += r.totalRollouts;
       currentPlan = basePlan;
@@ -366,6 +429,7 @@ export function createAI(opts) {
       claims = {};
       mctsStats = { rollouts: 0, calls: 0, nodes: 0 };
       lastDecisionT = -1;
+      lastObserveT = -Infinity;
     },
 
     onPeriodStart(period, obs) {
@@ -381,8 +445,7 @@ export function createAI(opts) {
           climbOpt = base.climb;
           climbLanes = {};
           const order = obs.robots
-            .filter((r) => r.alliance === side)
-            .slice()
+            .filter((r) => r.alliance === side && r.derived.maxClimbLevel >= 1)
             .sort((a, b) => b.derived.maxClimbLevel - a.derived.maxClimbLevel || a.climb.timeSec - b.climb.timeSec);
           for (let k = 0; k < Math.min(base.climb.count, order.length); k++) climbLanes[order[k].slot] = base.climb.levels[k] || 3;
         }
@@ -398,6 +461,13 @@ export function createAI(opts) {
       if (lastDecisionT !== t) {
         lastDecisionT = t;
         claims = {};
+      }
+      // The posterior is only as good as its sample count, and period starts give it just seven
+      // looks per MATCH. Re-observe on a timer so the END GAME TOWER read reflects behaviour
+      // observed all match rather than a single snapshot.
+      if (t - lastObserveT >= OBSERVE_EVERY_SEC) {
+        lastObserveT = t;
+        observe(obs);
       }
       const g = GEO[side];
       const roles = (currentPlan.periods[period] || [ROLE.SCORE, ROLE.SCORE, ROLE.SCORE]).slice();
@@ -460,14 +530,14 @@ export function createAI(opts) {
       if (scoreCommit.get(rb.slot) && (!hubActive || rb.carrying === 0)) scoreCommit.set(rb.slot, false);
       if (scoreCommit.get(rb.slot)) {
         why.reason = 'dump-committed';
-        return ret({ mode: INTENT.SCORE });
+        return ret(scoreIntent(rb, obs));
       }
       if (hubActive && rb.carrying > 0) {
         const left = secsUntilHubOff(obs);
         const start = (reason) => {
           scoreCommit.set(rb.slot, true);
           why.reason = reason;
-          return ret({ mode: INTENT.SCORE });
+          return ret(scoreIntent(rb, obs));
         };
         if (frac >= weights.dumpThreshold) return start(`dump-full(${left === null ? 'n/a' : left.toFixed(1)}s)`);
         if (left !== null && left <= weights.dumpBeforeIdleSec && frac >= weights.dumpBeforeIdleFrac) {
@@ -475,10 +545,32 @@ export function createAI(opts) {
         }
         if (t > TIME.matchSec - 3) return start('dump-last3s');
       }
-      if (!hubActive && frac >= weights.idleStockpileFrac) {
-        why.reason = 'idle-stockpile';
-        return ret({ mode: INTENT.STOCKPILE, target: g.shoot });
+
+      // ---- our own HUB is inactive ----
+      // During an ALLIANCE SHIFT we sit out, the opponent's HUB is the active one (Table 6-3), so
+      // parking in front of our own HUB accomplishes nothing: it cannot score and cannot bank. A
+      // ROBOT that is already full goes to deny their window; one that still has room keeps
+      // gathering, so the next window opens with a full load.
+      if (!hubActive) {
+        if (frac >= weights.pressWhenIdleFrac) {
+          const tgt = pickDefenseTarget(rb, obs);
+          if (tgt >= 0) {
+            why.reason = 'idle-press';
+            return ret({ mode: INTENT.DEFEND, targetRobot: tgt });
+          }
+          if (rb.carrying >= rb.capacity) {
+            // Nothing to press, nothing to bank: hold position clear of the HUB face rather than
+            // sitting on the spot a defender will camp.
+            const back = side === 'red' ? -1 : 1;
+            why.reason = 'idle-stage';
+            return ret({ mode: INTENT.STOCKPILE, target: { x: g.shoot.x + back * 60, y: g.shoot.y } });
+          }
+        }
+        const idleCell = pickCluster(rb, obs);
+        why.reason = 'idle-bank';
+        return ret(idleCell ? { mode: INTENT.COLLECT, target: { x: idleCell.x, y: idleCell.y } } : { mode: INTENT.IDLE });
       }
+
       const cell = pickCluster(rb, obs);
       why.reason = 'collect';
       return ret(cell ? { mode: INTENT.COLLECT, target: { x: cell.x, y: cell.y } } : { mode: INTENT.STOCKPILE, target: g.shoot });

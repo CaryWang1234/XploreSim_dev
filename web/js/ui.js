@@ -1,7 +1,7 @@
 // App wiring: roster editing, running the AI in a worker, playback, and the tactical read-out.
 
 import { TIME, POINTS, FIELD, FUEL, RULES, RULE_CONFLICTS, ROBOT_LIMITS } from './rules.js';
-import { SAMPLES, ARCHETYPES, derived } from './model.js';
+import { SAMPLES, ARCHETYPES, MECHANISMS, derived } from './model.js';
 import { DEFAULT_WEIGHTS } from './ai.js';
 import { FieldView } from './viz.js';
 import { PERIODS, periodSeconds } from './fastsim.js';
@@ -92,6 +92,24 @@ const CLIMB_OPTIONS = [
   { v: 3, t: '到 LEVEL 3' },
 ];
 
+const PRESET_KEYS = ['driveSpeedIps', 'intakeRate', 'capacity', 'shootRate', 'shootAccuracy', 'heightIn'];
+
+// A profile counts as a preset only while it still matches one. Matching on `team` alone would
+// keep labelling edited numbers "254 The Cheesy Poofs", which is exactly the kind of implied
+// authority this page must not have.
+function presetIndexOf(prof) {
+  return SAMPLES.findIndex(
+    (s) =>
+      s.team === prof.team &&
+      PRESET_KEYS.every((k) => Number(s[k]) === Number(prof[k])) &&
+      s.mechanism === prof.mechanism &&
+      Number(s.climb.timeSec) === Number(prof.climb.timeSec) &&
+      s.climb.l1 === prof.climb.l1 &&
+      s.climb.l2 === prof.climb.l2 &&
+      s.climb.l3 === prof.climb.l3,
+  );
+}
+
 function renderRoster(side) {
   const host = $(`roster-${side}`);
   host.innerHTML = '';
@@ -99,16 +117,22 @@ function renderRoster(side) {
     const d = derived(prof);
     const card = document.createElement('div');
     card.className = 'robot-card';
-    const presetIdx = SAMPLES.findIndex((s) => s.team === prof.team);
+    const presetIdx = presetIndexOf(prof);
+    const preset = presetIdx >= 0 ? SAMPLES[presetIdx] : null;
     const climbLevel = prof.climb.l3 ? 3 : prof.climb.l2 ? 2 : prof.climb.l1 ? 1 : 0;
     card.innerHTML = `
       <div class="robot-title"><span class="dot ${side}"></span>${side === 'red' ? '红' : '蓝'} ${slot + 1} · DRIVER STATION ${slot + 1}
         <em>${d.canTrench ? '可钻 TRENCH' : '仅可过 BUMP（高度 > 22.25in）'}</em></div>
       <div class="robot-row">
-        <label>机型预设
+        <label>预设
           <select data-k="preset">
             ${SAMPLES.map((s, i) => `<option value="${i}" ${i === presetIdx ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
             <option value="-1" ${presetIdx < 0 ? 'selected' : ''}>自定义</option>
+          </select>
+        </label>
+        <label>射击机构
+          <select data-k="mechanism">
+            ${MECHANISMS.map((m) => `<option value="${m.key}" title="${esc(m.hint)}" ${m.key === prof.mechanism ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}
           </select>
         </label>
         <label>驱动速度 in/s<input data-k="driveSpeedIps" type="number" step="2" value="${prof.driveSpeedIps}" /></label>
@@ -120,7 +144,17 @@ function renderRoster(side) {
         <label>爬塔上限
           <select data-k="climbMax">${CLIMB_OPTIONS.map((o) => `<option value="${o.v}" ${o.v === climbLevel ? 'selected' : ''}>${o.t}</option>`).join('')}</select>
         </label>
-      </div>`;
+        <label>爬升时间 s
+          <input data-k="climbTime" type="number" step="0.5" min="0" max="30" value="${prof.climb.timeSec}" ${climbLevel === 0 ? 'disabled' : ''} />
+        </label>
+      </div>
+      ${
+        preset && preset.ref
+          ? `<p class="prov">参照机型 · ${esc(preset.ref)}<span>来源：${esc(preset.source || '未提供')}</span><span>参数多为估计值，非实测，也不代表该队真实表现。</span></p>`
+          : presetIdx < 0
+            ? '<p class="prov">自定义参数<span>请按你自己的侦察数据填写。</span></p>'
+            : ''
+      }`;
     card.addEventListener('input', (e) => {
       const k = e.target.dataset.k;
       if (!k) return;
@@ -129,6 +163,10 @@ function renderRoster(side) {
       if (k === 'preset') {
         const i = Number(v);
         if (i >= 0) state.rosters[side][slot] = { ...JSON.parse(JSON.stringify(SAMPLES[i])), team: SAMPLES[i].team };
+      } else if (k === 'mechanism') {
+        p.mechanism = v;
+      } else if (k === 'climbTime') {
+        p.climb = { ...p.climb, timeSec: Math.max(0, Number(v)) };
       } else if (k === 'climbMax') {
         const n = Number(v);
         p.climb = { ...p.climb, l1: n >= 1, l2: n >= 2, l3: n >= 3 };
@@ -177,6 +215,10 @@ function setFrame(idx) {
   hubStrip.innerHTML = `<i class="${f.hub.red ? 'on-r' : ''}"></i><i class="${f.hub.blue ? 'on-b' : ''}"></i>`;
   $('score-red').textContent = String(f.s.red.total);
   $('score-blue').textContent = String(f.s.blue.total);
+  const delta = f.s.red.total - f.s.blue.total;
+  const ml = $('margin-label');
+  ml.textContent = delta === 0 ? '平' : `${delta > 0 ? '红' : '蓝'} +${Math.abs(delta)}`;
+  ml.className = `margin ${delta === 0 ? 'tie' : delta > 0 ? 'red' : 'blue'}`;
   $('detail-red').textContent = `FUEL ${f.s.red.fuel} · TOWER ${f.s.red.tower} · 罚分 ${f.s.red.fouls}`;
   $('detail-blue').textContent = `FUEL ${f.s.blue.fuel} · TOWER ${f.s.blue.tower} · 罚分 ${f.s.blue.fouls}`;
   for (const el of document.querySelectorAll('.period-strip .seg')) {
@@ -237,60 +279,121 @@ function payload(extra = {}) {
 // ---------------------------------------------------------------------------------------------
 // Chart helpers (plain canvas, no libraries)
 // ---------------------------------------------------------------------------------------------
-function barChart(canvas, values, labels, color = '#2f7de1') {
+const AXIS = '#6f809b';
+const GRID = '#1e2836';
+
+function prepCanvas(canvas, fallbackW = 320, fallbackH = 120) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const w = canvas.clientWidth || 320;
-  const h = canvas.clientHeight || 120;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
+  const w = canvas.clientWidth || fallbackW;
+  const h = canvas.clientHeight || fallbackH;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+// Horizontal gridlines with value labels, shared by both charts so the axis reads the same.
+function drawYAxis(ctx, w, h, padL, padB, padT, lo, hi, fmt) {
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (const f of [0, 0.5, 1]) {
+    const y = h - padB - f * (h - padB - padT);
+    ctx.strokeStyle = f === 0 ? '#33415a' : GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y + 0.5);
+    ctx.lineTo(w - 4, y + 0.5);
+    ctx.stroke();
+    ctx.fillStyle = AXIS;
+    ctx.fillText(fmt(lo + (hi - lo) * f), padL - 5, y);
+  }
+}
+
+function barChart(canvas, values, labels, color = '#2f7de1') {
+  const { ctx, w, h } = prepCanvas(canvas);
+  const padL = 26;
+  const padB = 15;
+  const padT = 13;
+  const plotH = Math.max(1, h - padB - padT);
   const max = Math.max(1, ...values);
-  const pad = 18;
-  const bw = (w - pad) / values.length;
+  const bw = (w - padL - 4) / Math.max(1, values.length);
+  drawYAxis(ctx, w, h, padL, padB, padT, 0, max, (v) => String(Math.round(v)));
+
   values.forEach((v, i) => {
-    const bh = ((h - 26) * v) / max;
+    const bh = (plotH * v) / max;
+    const x = padL + i * bw + 2;
+    const y = h - padB - bh;
+    const barW = Math.max(1, bw - 4);
     ctx.fillStyle = color;
-    ctx.globalAlpha = 0.85;
-    ctx.fillRect(pad + i * bw + 2, h - 18 - bh, bw - 4, bh);
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, barW, bh, Math.min(3, barW / 2));
+    else ctx.rect(x, y, barW, bh);
+    ctx.fill();
     ctx.globalAlpha = 1;
-    if (labels && labels[i] !== undefined) {
-      ctx.fillStyle = '#8ea0bb';
-      ctx.font = '9px ui-monospace, monospace';
+    if (v > 0 && bw > 26) {
+      ctx.fillStyle = '#cdd8e8';
       ctx.textAlign = 'center';
-      ctx.fillText(labels[i], pad + i * bw + bw / 2, h - 5);
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(String(v), x + barW / 2, Math.max(padT, y - 4));
     }
   });
+
+  if (labels && labels.length) {
+    ctx.fillStyle = AXIS;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    const step = Math.max(1, Math.ceil((labels.length * 24) / Math.max(1, w - padL)));
+    labels.forEach((l, i) => {
+      if (i % step === 0) ctx.fillText(l, padL + i * bw + bw / 2, h - 4);
+    });
+  }
 }
 
 function lineChart(canvas, points, color = '#ffd94a') {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const w = canvas.clientWidth || 320;
-  const h = canvas.clientHeight || 120;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  if (!points.length) return;
+  const { ctx, w, h } = prepCanvas(canvas);
+  if (!points || !points.length) return;
+  const padL = 30;
+  const padB = 12;
+  const padT = 12;
+  const padR = 8;
   const max = Math.max(...points);
   const min = Math.min(...points);
-  const span = Math.max(0.001, max - min);
+  const span = Math.max(1e-6, max - min);
+  const X = (i) => padL + (i / Math.max(1, points.length - 1)) * (w - padL - padR);
+  const Y = (p) => h - padB - ((p - min) / span) * (h - padB - padT);
+  drawYAxis(ctx, w, h, padL, padB, padT, min, max, (v) => v.toFixed(2));
+
+  ctx.beginPath();
+  points.forEach((p, i) => (i ? ctx.lineTo(X(i), Y(p)) : ctx.moveTo(X(i), Y(p))));
+  ctx.lineTo(X(points.length - 1), h - padB);
+  ctx.lineTo(X(0), h - padB);
+  ctx.closePath();
+  ctx.globalAlpha = 0.16;
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  ctx.beginPath();
+  points.forEach((p, i) => (i ? ctx.lineTo(X(i), Y(p)) : ctx.moveTo(X(i), Y(p))));
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const x = 8 + (i / Math.max(1, points.length - 1)) * (w - 16);
-    const y = h - 12 - ((p - min) / span) * (h - 24);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
+  ctx.lineJoin = 'round';
   ctx.stroke();
-  ctx.fillStyle = '#8ea0bb';
-  ctx.font = '10px ui-monospace, monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(`min ${min.toFixed(2)}  max ${max.toFixed(2)}`, 8, 11);
+
+  const li = points.length - 1;
+  ctx.beginPath();
+  ctx.arc(X(li), Y(points[li]), 3, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.fillStyle = '#cdd8e8';
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(points[li].toFixed(3), w - padR, Math.max(padT + 8, Y(points[li]) - 6));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -335,6 +438,27 @@ function renderResult(res) {
   renderInsights(r);
   renderDetail(r);
   renderPeriodStrip(r.hubSchedule);
+  renderAutoNote(r);
+  $('tab-insight').classList.remove('is-empty');
+}
+
+// Which ALLIANCE took AUTO decides which two SHIFTs belong to whom (Table 6-3), and that is the
+// single most counter-intuitive thing in this game: winning AUTO buys points and sells a window.
+function renderAutoNote(r) {
+  const host = $('auto-note');
+  const af = r && r.autoFuel;
+  if (!r || !r.hubSchedule || !af) {
+    host.textContent = '';
+    return;
+  }
+  const tie = af.red === af.blue;
+  const w = r.autoWinner;
+  const who = w === 'red' ? '红' : '蓝';
+  const other = w === 'red' ? '蓝' : '红';
+  const off = r.hubSchedule.filter((x) => String(x.period).startsWith('SHIFT') && x[w] === false).map((x) => x.period);
+  host.innerHTML =
+    `<b>AUTO ${af.red} : ${af.blue}</b> ${tie ? '打平 → 由 FMS 随机指定归属' : `→ <b>${who}方</b>多得`}` +
+    `　Table 6-3：${who}方 HUB 在 <b>${off.join(' / ')}</b> 停摆，这两段是 ${other}方的独占得分窗口。`;
 }
 
 function renderPlan(plan) {
@@ -411,8 +535,39 @@ function renderInsights(r) {
   if (r.rpProb.supercharged < 0.5) {
     list.push({ tone: 'info', text: `<b>SUPERCHARGED（≥${th.supercharged.regional} 颗）基本放弃。</b>三台合计要在 active 窗口里打出 ${th.supercharged.regional} 颗，等于每分钟 ~${fmt((th.supercharged.regional / 110) * 60, 0)} 颗的持续输出。资格赛里不要为它牺牲稳定性。` });
   }
-  if (r.rpProb.traversal < 0.95) {
-    list.push({ tone: 'warn', text: `<b>TRAVERSAL RP（TOWER ≥ ${th.traversal.regional} 分）有风险。</b>注意 §6.5.2 允许 AUTO 的 LEVEL 1 与 TELEOP 爬塔分别计分，两次都算进 TRAVERSAL；AUTO 两台 L1（30 分）+ END GAME 一台 L2（20 分）刚好 50 分，是成本最低的凑线法。` });
+
+  // The only external check on whether a recommended margin is real: how the推演 score compares
+  // with what elite ALLIANCES actually put up at the 2026 Championship.
+  const runMean = ((r.avgAiScore || 0) + (r.avgOppScore || 0)) / 2;
+  if (runMean > 0) {
+    const high = runMean > 850;
+    list.push({
+      tone: high ? 'warn' : 'info',
+      text:
+        `<b>对标真实赛场：本方案单联盟均值 ${fmt(runMean, 0)} 分。</b>2026 Einstein Finals 的真实比分是 406 / 456 / 518 / 561 / 711 / 712，赛事平均 627、最高 842（The Blue Alliance，见「规则」页校准表）。` +
+        (high
+          ? '本场比真实量级高，说明这批侦察参数在窗口利用率上比顶级赛场乐观，推演出来的分差会被同比例放大——把速度/容量/命中率换成自家实测值再看一次。'
+          : '与顶级赛场同一量级，分差可以直接当作战术收益看。'),
+    });
+  }
+  // Never advise a climb the selected ROBOTs physically cannot make: top-tier ROBOTs this season
+  // mostly do not climb, and suggesting "two AUTO L1 + one L2 gets you there" would be nonsense.
+  const aiRoster = ((r.plan && state.rosters[r.plan.side]) || []).filter((p) => p.climb && (p.climb.l1 || p.climb.l2 || p.climb.l3));
+  const aiMaxClimb = ((r.plan && state.rosters[r.plan.side]) || []).reduce(
+    (m, p) => Math.max(m, p.climb && p.climb.l3 ? 3 : p.climb && p.climb.l2 ? 2 : p.climb && p.climb.l1 ? 1 : 0),
+    0,
+  );
+  if (!aiRoster.length) {
+    list.push({ tone: 'info', text: `<b>TRAVERSAL RP 直接放弃。</b>AI 方的三台 ROBOT 爬塔上限都是「不爬塔」，TOWER 分恒为 0，够不到 ${th.traversal.regional} 分。这也是本季强队的常态：把 END GAME 的 30 秒全留在 FUEL 循环上更划算。想测算爬塔方案，把某台的爬塔上限改成 L1 以上再跑。` });
+  } else if (r.rpProb.traversal < 0.95) {
+    const auto = 2 * POINTS.tower.l1Auto; // §6.5.2: LEVEL 1 in AUTO, two ROBOTs max
+    const tip =
+      aiMaxClimb >= 3
+        ? `最省的一条线是 AUTO 两台 L1（${auto} 分）+ END GAME 一台 L3（${POINTS.tower.l3Teleop} 分）。`
+        : aiMaxClimb === 2
+          ? `最省的一条线是 AUTO 两台 L1（${auto} 分）+ END GAME 一台 L2（${POINTS.tower.l2Teleop} 分），刚好 ${auto + POINTS.tower.l2Teleop} 分。`
+          : `本方爬塔上限只有 L1，得 AUTO 两台 L1（${auto} 分）+ END GAME 两台 L1（${2 * POINTS.tower.l1Teleop} 分）才够 ${th.traversal.regional} 分——等于 END GAME 要牺牲两台去爬，把 30 秒的 FUEL 循环让出去。`;
+    list.push({ tone: 'warn', text: `<b>TRAVERSAL RP（TOWER ≥ ${th.traversal.regional} 分）有风险。</b>§6.5.2 的 L1 在 AUTO 与 TELEOP 各计一次。${tip}` });
   } else {
     list.push({ tone: 'good', text: `<b>TRAVERSAL RP 稳。</b>方案 TOWER 均值 ${fmt(r.avgTower, 0)} 分 ≥ ${th.traversal.regional}。` });
   }
@@ -431,7 +586,7 @@ function renderInsights(r) {
   } else {
     list.push({ tone: 'info', text: `<b>季后赛只看胜负。</b>目标函数已切到胜率，AI 会更愿意用防守换掉对手的一个得分窗口。` });
   }
-  list.push({ tone: 'info', text: `<b>别忘了模型的边界。</b>这里的机器人数据是<strong>示例值</strong>；把自家侦察表里的真实速度/容量/命中率填进去，结论才对你队成立。` });
+  list.push({ tone: 'info', text: `<b>别忘了模型的边界。</b>「参照机型」的<strong>队号队名是公开常识，性能参数是估计值</strong>，不是实测，也不代表这些队伍的真实表现；把自家侦察表里的速度/容量/命中率/爬升时间填进去，结论才对你队成立。` });
 
   $('insights').innerHTML = list.map((i) => `<li class="tone-${i.tone}">${i.text}</li>`).join('');
 }
@@ -492,6 +647,30 @@ function renderRules() {
   $('const-table').innerHTML = `<thead><tr><th>项目</th><th>取值</th><th>出处</th></tr></thead><tbody>${consts
     .map(([a, b, c]) => `<tr><td>${a}</td><td class="mono">${b}</td><td class="mono">${c}</td></tr>`)
     .join('')}</tbody>`;
+
+  // Real MATCH scores are the only external yardstick this simulator can be calibrated against, so
+  // they are shown next to the engine's own measured throughput instead of being hidden in a note.
+  const real = [
+    ['Einstein F1 M1', '4065 / 4414 / 1323', '456', '868 / 2910 / 2046', '518'],
+    ['Einstein F1 M2', '4065 / 4414 / 1323', '711', '868 / 2910 / 2046', '561'],
+    ['Einstein F1 M3', '4065 / 4414 / 1323', '712', '868 / 2046 / 2910', '406'],
+    ['赛事平均单联盟总分', '—', '627.5', '赛事最高', '842'],
+    ['半决赛 SF1 / SF2', '7407 / 5940 / 9470', '443', '868 / 2910 / 2046', '665'],
+  ];
+  const simRows = [
+    ['引擎吞吐（greedy 对 greedy，双方都不防守；scripts/probe.mjs 实测）', '≈ 6.1 FUEL/s 单联盟', '真实决赛约 4.7 FUEL/s'],
+    ['引擎单联盟总分（双方都不防守，两侧都是参照机型）', '≈ 690（红 710 / 蓝 669）', '真实 Einstein 平均 627、区间 406–712、最高 842'],
+    ['校准旋钮：HUB 出料口吞吐上限（§5.4 四个出口）', '4.0 FUEL/s', '由真实平均分反推——场上只有 504 颗球，每场大约只能循环一次'],
+    ['AUTO 段得球', '≈ 144', '真实决赛 111–177'],
+  ];
+  $('calib-table').innerHTML =
+    `<thead><tr><th>比赛 / 指标</th><th>红方</th><th class="mono">红分</th><th>蓝方</th><th class="mono">蓝分</th></tr></thead>` +
+    `<tbody>${real
+      .map(([m, rt, rs, bt, bs]) => `<tr><td>${esc(m)}</td><td class="mono">${esc(rt)}</td><td class="mono">${esc(rs)}</td><td class="mono">${esc(bt)}</td><td class="mono">${esc(bs)}</td></tr>`)
+      .join('')}</tbody>` +
+    `<tbody>${simRows
+      .map(([k, v, ref]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td><td colspan="3" class="hint">${esc(ref)}</td></tr>`)
+      .join('')}</tbody>`;
 }
 
 function renderBench(data) {
