@@ -1,121 +1,152 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>REBUILT 战术推演台 · 2026 FRC 对局模拟</title>
+    <title>XploreSim</title>
     <meta
       name="description"
-      content="按 2026 FIRST 机器人竞赛 REBUILT 规则（TU21）实现的比赛推演与战术策划工具：规则引擎 + 蒙特卡洛搜索 AI + 对手建模 + 自博弈调参。"
+      content="A match simulator and tactics planner for the 2026 FIRST Robotics Competition game REBUILT (manual TU21). Rules engine, Monte Carlo search AI, opponent modelling, self-play tuning."
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
-        <span class="mark">R</span>
+        <span class="mark">X</span>
         <div>
-          <h1>REBUILT 战术推演台</h1>
-          <p class="sub">2026 FIRST 机器人竞赛 · 规则版本 TU21 · 全部常量按规则条款实现</p>
+          <h1>XploreSim</h1>
+          <p class="sub">2026 FIRST Robotics Competition · manual version TU21 · every constant comes from a rule</p>
         </div>
       </div>
       <div class="topbar-actions">
-        <div class="chip" id="chip-status">就绪</div>
-        <button class="btn ghost" id="btn-tab-rules" type="button">规则依据</button>
+        <div class="chip" id="chip-status">Ready</div>
+        <button class="btn ghost" id="btn-tab-rules" type="button">Rule sources</button>
+        <button class="btn ghost" id="btn-tab-data" type="button" title="Every figure on this page was measured on the current build, with the script that produced it next to it">Measured data</button>
       </div>
     </header>
 
     <main>
-      <!-- 1. 配置 -->
+      <!-- 1. Setup -->
       <section class="panel setup" aria-labelledby="h-setup">
         <div class="panel-head">
-          <h2 id="h-setup">对局配置</h2>
-          <p class="hint">选机器人 → 改能力参数 → 推演。参数就是你在赛场能测到的量。</p>
+          <h2 id="h-setup">Match setup</h2>
+          <p class="hint">Pick robots, edit their specs, run a match. The numbers on the cards are things you can measure in the pit.</p>
         </div>
 
         <div class="setup-grid">
           <div class="alliance-block red">
-            <h3>红联盟</h3>
+            <h3>Red alliance</h3>
+            <label class="hp-row" title="Red's HUMAN PLAYER throws FUEL from the CHUTE into red's own HUB (§6.1). Throws per second, and the fraction that go in.">HUMAN PLAYER
+              <input id="hp-red" type="number" min="0" max="8" step="0.05" value="0.4" /> throws/s
+              <input id="hpacc-red" type="number" min="0" max="100" step="1" value="75" /> % in
+            </label>
             <div class="roster" id="roster-red"></div>
           </div>
           <div class="alliance-block blue">
-            <h3>蓝联盟</h3>
+            <h3>Blue alliance</h3>
+            <label class="hp-row" title="Blue's HUMAN PLAYER throws FUEL from the CHUTE into blue's own HUB (§6.1). Throws per second, and the fraction that go in.">HUMAN PLAYER
+              <input id="hp-blue" type="number" min="0" max="8" step="0.05" value="0.4" /> throws/s
+              <input id="hpacc-blue" type="number" min="0" max="100" step="1" value="75" /> % in
+            </label>
             <div class="roster" id="roster-blue"></div>
           </div>
         </div>
 
         <details class="advanced">
-          <summary>对局条件与规则开关</summary>
+          <summary>Match conditions and rule switches</summary>
           <div class="adv-grid">
-            <label>优化目标
+            <label>Objective
               <select id="sel-objective">
-                <option value="rs">排位分 RS（资格赛）</option>
-                <option value="win">胜率（季后赛）</option>
+                <option value="rs">Ranking points (qualification)</option>
+                <option value="win">Win rate (playoffs)</option>
               </select>
             </label>
-            <label>赛事等级（影响 RP 阈值 Table 6-5）
+            <label>Event level (sets the RP thresholds, Table 6-5)
               <select id="sel-event">
-                <option value="regional">区域赛 / 地区赛</option>
-                <option value="districtChamp">地区锦标赛（DCMP / CMP）</option>
+                <option value="regional">Regional / district event</option>
+                <option value="districtChamp">District championship (DCMP / CMP)</option>
               </select>
             </label>
-            <label>AUTO 结果归属（Table 6-3）
+            <label>AUTO winner (Table 6-3)
               <select id="sel-autowinner">
-                <option value="auto">按仿真结果自动判定</option>
-                <option value="red">强制红方多得</option>
-                <option value="blue">强制蓝方多得</option>
+                <option value="auto">Decide from the simulation</option>
+                <option value="red">Force red to score more</option>
+                <option value="blue">Force blue to score more</option>
               </select>
             </label>
-            <label>随机种子
+            <label>Random seed
               <input id="inp-seed" type="number" value="20260110" step="1" />
             </label>
-            <label>蒙特卡洛场次
+            <label>Monte Carlo matches
               <input id="inp-mcmatches" type="number" value="120" min="10" max="600" step="10" />
             </label>
-            <label>搜索迭代（每决策）
+            <label>Search iterations (per decision)
               <input id="inp-iter" type="number" value="200" min="40" max="600" step="20" />
             </label>
             <label class="check">
               <input id="chk-l1teleop" type="checkbox" checked />
-              TELEOP 允许 LEVEL 1 得 10 分（Table 6-4 与 §6.5.2 冲突，见「规则依据」）
+              Allow LEVEL 1 to score 10 in TELEOP (Table 6-4 conflicts with §6.5.2, see Rule sources)
             </label>
             <label class="check">
               <input id="chk-faults" type="checkbox" checked />
-              启用机器人故障/降级（按 reliability）
+              Enable robot faults and breakdowns (from reliability)
+            </label>
+            <label class="check" title="G415/G416/G417: a collision that damages or functionally impairs an opponent ROBOT is a MAJOR FOUL (15 points) plus a YELLOW CARD, or a RED CARD if that ROBOT can no longer drive. Off by default: the rules are real, but how often a hard hit actually breaks something has no real-world anchor here, and switching it on moves the calibrated scores. See 'Hard contact between ROBOTS' below.">
+              <input id="chk-contactfouls" type="checkbox" />
+              Assess hard-contact fouls G415/G416/G417 (MAJOR FOUL + card when a collision damages an opponent)
             </label>
           </div>
         </details>
 
         <div class="run-row">
-          <button class="btn primary" id="btn-run" type="button">推演单场（带动画）</button>
-          <button class="btn" id="btn-mc" type="button">蒙特卡洛批量推演</button>
-          <button class="btn" id="btn-bench" type="button">对比基线</button>
-          <button class="btn" id="btn-train" type="button">自博弈调参</button>
+          <button class="btn primary" id="btn-run" type="button">Play one match</button>
+          <button class="btn" id="btn-mc" type="button">Monte Carlo batch</button>
+          <button class="btn" id="btn-bench" type="button">Compare baselines</button>
+          <button class="btn" id="btn-train" type="button">Self-play tuning</button>
           <div class="progress" id="progress" hidden><div class="bar" id="progress-bar"></div><span id="progress-label"></span></div>
         </div>
       </section>
 
-      <!-- 2. 场地 -->
+      <!-- 2. Field -->
       <section class="panel field-panel" aria-labelledby="h-field">
         <div class="panel-head">
-          <h2 id="h-field">场上推演</h2>
-          <p class="hint" id="field-sub">跑一场就会在这里回放：FUEL 流向、换挡窗口、爬塔</p>
+          <h2 id="h-field">Field view</h2>
+          <p class="hint" id="field-sub">Replays here after a run. <span class="kbd">F</span> fullscreen · <span class="kbd">C</span> fill · <span class="kbd">space</span> pause · <span class="kbd">[</span> <span class="kbd">]</span> step fouls and climbs · <span class="kbd">Home</span>/<span class="kbd">End</span> ends · arrows ±1 s (<span class="kbd">Shift</span> ±5)</p>
         </div>
         <div class="scoreboard">
-          <div class="score red"><span class="tag">红</span><strong id="score-red">0</strong><span class="detail" id="detail-red">FUEL 0 · TOWER 0 · 罚分 0</span></div>
+          <div class="score red">
+            <span class="tag">RED</span>
+            <strong id="score-red">0</strong>
+            <span class="teams" id="teams-red">—</span>
+            <span class="detail" id="detail-red">FUEL 0 · TOWER 0 · Fouls 0</span>
+          </div>
           <div class="clock">
             <div class="period" id="period-label">—</div>
             <div class="timer" id="timer-label">2:40</div>
-            <div class="hub-strip" id="hub-strip"></div>
+            <div class="hub-strip" id="hub-strip" aria-live="polite"></div>
             <div class="margin" id="margin-label">—</div>
           </div>
-          <div class="score blue"><span class="tag">蓝</span><strong id="score-blue">0</strong><span class="detail" id="detail-blue">FUEL 0 · TOWER 0 · 罚分 0</span></div>
+          <div class="score blue">
+            <span class="tag">BLUE</span>
+            <strong id="score-blue">0</strong>
+            <span class="teams" id="teams-blue">—</span>
+            <span class="detail" id="detail-blue">FUEL 0 · TOWER 0 · Fouls 0</span>
+          </div>
         </div>
-        <canvas id="field" width="900" height="440" aria-label="REBUILT 场地俯视图"></canvas>
+        <!-- One chip per ROBOT that took a foul, so the scoreboard says which machine and not just which
+             wall. Empty between matches, and a chip jumps the replay to that ROBOT's first foul. -->
+        <div class="foul-strip" id="foul-strip"></div>
+        <canvas id="field" width="900" height="440" aria-label="Top-down view of the REBUILT field"></canvas>
         <div class="transport">
-          <button class="btn small" id="btn-play" type="button">播放</button>
-          <input type="range" id="scrub" min="0" max="0" value="0" step="1" aria-label="回放进度" />
-          <label class="speed">速度
+          <button class="btn small" id="btn-play" type="button">Play</button>
+          <div class="scrub-wrap">
+            <input type="range" id="scrub" min="0" max="0" value="0" step="1" aria-label="Playback position" />
+            <div class="scrub-marks" id="scrub-marks" role="list" aria-label="Fouls, climbs and faults in this match"></div>
+          </div>
+          <button class="btn small" id="btn-ev-prev" type="button" title="Jump to the previous foul, climb or fault (shortcut [)">‹ event</button>
+          <button class="btn small" id="btn-ev-next" type="button" title="Jump to the next foul, climb or fault (shortcut ])">event ›</button>
+          <label class="speed">Speed
             <select id="sel-speed">
               <option value="1">1×</option>
               <option value="2">2×</option>
@@ -124,67 +155,109 @@
               <option value="16">16×</option>
             </select>
           </label>
+          <label class="speed" title="Turn off to hide team plates and just watch FUEL move">Team numbers
+            <input type="checkbox" id="chk-tags" checked />
+          </label>
+          <button class="btn small" id="btn-cinema" type="button" title="Field fills the window, other panels collapse (shortcut C)">Fill</button>
+          <button class="btn small" id="btn-fs" type="button" title="Browser fullscreen, like watching a video (F to enter, Esc to leave)">Fullscreen</button>
         </div>
-        <div class="period-strip" id="period-strip" aria-label="换挡时间轴"></div>
+        <div class="period-strip" id="period-strip" aria-label="Shift timeline"></div>
         <p class="auto-note" id="auto-note"></p>
         <p class="legend" id="legend"></p>
+        <details class="advanced howto">
+          <summary>How to read the picture</summary>
+          <p class="hint">Each ROBOT is a square turned to its heading. The teal bar is the full-width intake slot, on whichever face the card says; the pale plate on a Dumper is the one side that can score, and a Turret's barrel tracks the HUB on its own. A shot draws one line per shooter through the balls it has in the air. Click a team plate in the legend above to follow that ROBOT.</p>
+        </details>
       </section>
 
-      <!-- 3. 输出 -->
+      <!-- 3. Output -->
       <aside class="panel output" aria-labelledby="h-out">
         <div class="tabs" role="tablist">
-          <button class="tab active" data-tab="insight" type="button">战术结论</button>
-          <button class="tab" data-tab="detail" type="button">数据明细</button>
-          <button class="tab" data-tab="bench" type="button">基线对比</button>
-          <button class="tab" data-tab="train" type="button">训练</button>
-          <button class="tab" data-tab="rules" type="button">规则依据</button>
+          <button class="tab active" data-tab="insight" type="button">Tactics</button>
+          <button class="tab" data-tab="detail" type="button">Numbers</button>
+          <button class="tab" data-tab="bench" type="button">Baselines</button>
+          <button class="tab" data-tab="train" type="button">Training</button>
+          <button class="tab" data-tab="rules" type="button">Rule sources</button>
+          <button class="tab" data-tab="data" type="button">Measured data</button>
         </div>
 
         <div class="tab-body is-empty" id="tab-insight">
-          <div class="empty" id="insight-empty">
-            <strong>还没有推演结果</strong>
-            <span>点左边的「推演单场（带动画）」看一场回放，或点「蒙特卡洛批量推演」拿概率分布。</span>
+          <div class="pick-row">
+            <label title="Which alliance the AI plans for. Everything below — the plan, the posterior, the distribution — is read from this alliance's seat.">Plan for
+              <select id="sel-aiside">
+                <option value="red" selected>Red alliance</option>
+                <option value="blue">Blue alliance</option>
+              </select>
+            </label>
+            <label title="Who drives the other alliance. The greedy baseline is the hand-written cycling plan every calibration figure on this page is measured against, so it is the default. 'Both sides AI' gives the other alliance the same search: a fair mirror of your own roster, at roughly twice the cost per match.">Opponent
+              <select id="sel-opponent">
+                <option value="greedy" selected>Greedy baseline (hand-written plan)</option>
+                <option value="shootalways">Shoot-always baseline</option>
+                <option value="random">Random baseline</option>
+                <option value="ai">Both sides AI (the same search)</option>
+              </select>
+            </label>
+            <span class="pick-note" id="aiside-note"></span>
           </div>
+          <div class="empty" id="insight-empty">
+            <strong>No match yet</strong>
+            <span>Press Play one match on the left for a replay, or run the Monte Carlo batch for a score distribution.</span>
+          </div>
+          <p class="scope" id="scope-batch"></p>
           <div class="cards" id="prob-cards"></div>
-          <h3>得分分布（每 50 分一档）</h3>
-          <canvas class="chart" id="chart-score"></canvas>
-          <h3>RP 达成概率（Table 6-4 / 6-5）</h3>
-          <div id="rp-list" class="rp-list"></div>
-          <h3>AI 制定出的作战方案</h3>
+          <div id="batch-blocks">
+            <h3>Score distribution (50-point bins)</h3>
+            <canvas class="chart" id="chart-score"></canvas>
+            <h3>Point margin (50-point bins, negative is a loss)</h3>
+            <canvas class="chart" id="chart-margin"></canvas>
+            <h3>Chance of each RP (Table 6-4 / 6-5)</h3>
+            <div id="rp-list" class="rp-list"></div>
+            <h3>Per-match detail</h3>
+            <div class="table-wrap"><table id="batch-table"></table></div>
+            <div id="batch-delta"></div>
+          </div>
+          <p class="scope" id="scope-replay"></p>
+          <h3>Plan the AI chose</h3>
           <div id="plan-view" class="plan-view"></div>
-          <h3>对手原型判断（贝叶斯后验）</h3>
+          <h3>Opponent archetype (Bayesian posterior)</h3>
           <div id="posterior" class="posterior"></div>
-          <h3>关键战术提示</h3>
+          <h3>What the match tells you</h3>
           <ul class="insights" id="insights"></ul>
         </div>
 
         <div class="tab-body" id="tab-detail" hidden>
-          <h3>机器人数据</h3>
+          <h3>Robot numbers</h3>
           <div class="table-wrap"><table id="robot-table"></table></div>
-          <h3>判罚事件</h3>
-          <ul class="events" id="event-list"></ul>
-          <h3>换挡与 HUB 状态（Table 6-3）</h3>
+          <h3>Fouls — who committed them</h3>
+          <p class="hint" id="foul-note"></p>
+          <div class="table-wrap"><table id="foul-table"></table></div>
+          <div id="foul-batch-block" hidden>
+            <h3>Fouls across the batch</h3>
+            <div class="table-wrap"><table id="foul-batch-table"></table></div>
+          </div>
+          <h3>Shifts and HUB state (Table 6-3)</h3>
           <div class="table-wrap"><table id="hub-table"></table></div>
+          <h3>Other events</h3>
+          <ul class="events" id="event-list"></ul>
         </div>
 
         <div class="tab-body" id="tab-bench" hidden>
           <p class="hint">
-            基线是三种「人类手写策略」：随机、只看满仓不看 HUB 状态、以及懂得等 HUB 窗口的最优贪心。AI 要赢的是第三种。
+            The baselines are three hand-written strategies: random, fill the hopper and ignore the HUB, and a greedy planner that waits for its own HUB windows. The third one is what the AI has to beat.
           </p>
           <div class="table-wrap"><table id="bench-table"></table></div>
           <div class="table-wrap"><table id="elo-table"></table></div>
-          <h3>分析模型 vs 真实引擎</h3>
+          <h3>Analytic model vs full engine</h3>
           <p class="hint" id="agreement"></p>
-          <button class="btn" id="btn-bench-recalc" type="button">本地重跑基线（较慢）</button>
+          <button class="btn" id="btn-bench-recalc" type="button">Rerun baselines here (slow)</button>
         </div>
 
         <div class="tab-body" id="tab-train" hidden>
           <p class="hint">
-            自博弈进化调参：对策略权重做 (μ+λ) 进化，适应度取平滑化的 RP + 胜率 + 分差。浏览器里预算有限，样本少会过拟合，
-            所以默认出厂权重仍是在完整基线上验证过的那套。
+            (μ+λ) evolution on the strategy weights. Fitness is smoothed RP plus win rate plus point margin, and <strong>selection is paired</strong>: every candidate, the incumbent included, is scored on the <em>same</em> MATCHes each generation, so "improved" never means "measured on easier seeds". The result line prints the <strong>selection noise</strong> it measured — the spread between candidates on identical MATCHes — and a gain smaller than about twice it is the seed set, not the weights. The browser budget is small, so treat a run here as exploratory; <span class="mono">scripts/train.mjs</span> is the same search offline and refuses to return weights that do not beat the shipped set on seed families it never trained on.
           </p>
-          <label class="field-label">预算（秒）<input id="inp-train-budget" type="number" value="30" min="5" max="120" step="5" /></label>
-          <button class="btn primary" id="btn-train-run" type="button">开始训练</button>
+          <label class="field-label">Budget (seconds)<input id="inp-train-budget" type="number" value="30" min="5" max="120" step="5" /></label>
+          <button class="btn primary" id="btn-train-run" type="button">Start training</button>
           <canvas class="chart" id="chart-train"></canvas>
           <div class="table-wrap"><table id="weight-table"></table></div>
           <div id="train-result" class="hint"></div>
@@ -192,30 +265,207 @@
 
         <div class="tab-body" id="tab-rules" hidden>
           <p class="hint">
-            下表左侧是手册原文出处，右侧是它落到引擎里的哪个函数。引擎自检会强制校验 Table 6-3 与计分恒等式。
+            Each row below starts with a rule transcribed from the manual (2026 Game Manual, version TU21). The left column carries the rule id; quoted text is <strong>verbatim</strong>, the rest is a summary. The right column says which function implements it. A self-check enforces Table 6-3 and the score identity at load.
           </p>
           <div class="table-wrap"><table id="rules-table"></table></div>
-          <h3>手册内部冲突（保持可见）</h3>
+          <h3>Manual conflicts (kept visible on purpose)</h3>
           <div id="conflict-list" class="conflicts"></div>
-          <h3>计分与阈值常量</h3>
+          <h3>Scoring and threshold constants</h3>
           <div class="table-wrap"><table id="const-table"></table></div>
-          <h3>对标真实赛场（校准基准）</h3>
-          <p class="hint">
-            仿真出来的分数量级必须和赛场对得上，否则推演出的战术没有意义。下表是 2026 Einstein Finals（事件
-            <span class="mono">2026cmptx</span>）的真实比分，取自 The Blue Alliance 比赛页面。引擎里的机制摩擦就是按这组数字校准的：进料口是<strong>有向</strong>的（±53° 锥角，不是全向真空吸球）、滚筒吸球速率随车速衰减、Dumper 必须停顿瞄准、HUB 出料口吞吐限定为 4.0 颗/秒。
-          </p>
-          <p class="hint">
-            原先引擎让机器人做全向真空吸球、且 HUB 无限快地把球吐回场内，单联盟能打到 1150 分以上，是真实值的两倍。改完之后，双方都不防守的精英对局落在 <strong>≈690</strong>，与真实 Einstein 平均 627 同一量级。<strong>仍存在的偏差：</strong>引擎仍比真实略高（≈10%），且为了压住节奏，场上散落的 FUEL 比真实场地偏少；参照机型的参数本身也仍是估值。
-          </p>
+        </div>
+
+        <div class="tab-body" id="tab-data" hidden>
+          <h3>Calibration, AI strength and change notes</h3>
+          <p class="hint">Every figure below was measured on the current build. Open a block for the sample it came from.</p>
           <div class="table-wrap"><table id="calib-table"></table></div>
+          <div class="notes">
+            <details class="note" open>
+              <summary><b>Calibrated against real matches</b><i>greedy mirror 625.2 against a real average of 627 — 0.3% under</i></summary>
+              <div class="body">
+                <p>The table above is the real scoreboard of the 2026 Einstein Finals (<span class="mono">2026cmptx</span>, read from The Blue Alliance): 456 / 518, 711 / 561, 712 / 406 — average <strong>627</strong>, high 842. Simulated scores have to land near those or the tactics mean nothing.</p>
+                <p>The comparable run is the <strong>greedy mirror</strong>: the same hand-written cycling plan on both sides, nobody defending, 24 MATCHes × 2 seed sets. It scores <strong>625.2</strong> (624.9 / 625.5), which is 0.3% under the real average. The AI's own searched mirror is <strong>589.8</strong> (589.1 / 590.6) — 35 points under greedy's, because in a mirror the two sides' denial cancels but the search still pays for thinking about it, and on this build denial is worth less than it costs (see the defence figure under "How strong the AI is"). A mirror pinned to all-SCORE is <strong>660.6</strong> (656.6 / 664.6). Both sides of a mirror share one random stream, so read all three as ±2%.</p>
+                <p>Throughput still runs high: <strong>5.61 FUEL/s</strong> alliance-wide against a real ≈4.7. The field carries a mean of <strong>193</strong> loose FUEL (minimum 110) of the 504 §6.3.4 stages: 24 per DEPOT on the carpet, 24 per CHUTE held behind the CHUTE DOOR, up to 8 preloaded per ROBOT, 360 in the NEUTRAL ZONE. The HUB ejects what it processes back into the NEUTRAL ZONE through four outlets (§5.4), which is why the loose FUEL ends up midfield. Every ball is drawn in the replay.</p>
+                <p>Reproduce with <span class="mono">node scripts/mirror.mjs</span> and <span class="mono">MATCHES=12 node scripts/probe.mjs</span>.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>How strong the AI is</b><i>26.3% of 192 MATCHes against greedy, 625.7 to 661.3</i></summary>
+              <div class="body">
+                <p>Against <strong>greedy</strong> — a hand-written plan that never wastes FUEL, cycles the nearest pile and climbs at the end — the AI wins <strong>26.3% of 192 MATCHes</strong> over four disjoint seed families (19.8 / 29.2 / 22.9 / 33.3%) and scores <strong>625.7 against 661.3</strong> on identical ROBOTs. It is behind the baseline, not ahead of it, and the gap is honest: greedy is a clean cycling plan with no defence, no passing and no plan search to pay for.</p>
+                <p>It was 39.1% on the previous build, and the fall is worth explaining rather than burying. Two things moved. The <strong>foul-direction bug</strong> described under "Hard contact between ROBOTS" was paying the AI for pinning and ramming: with that money taken back, its DEFEND roles went from an asset to a cost, and the ablation that used to say "removing defence costs 6.3 win points" now says the opposite — removing it was worth <strong>+5.2 win points and +9.5 of margin</strong> at n=192. The shipped <span class="mono">defenseEfficacy</span> is now 0, which reprices what the model cannot see and recovers part of the difference. The other half is the <strong>full-width rear mouth</strong>, which rewards the policy that spends the most frames sweeping — greedy, at 63% of its frames in COLLECT against the AI's 43% — more than it rewards a mixed plan.</p>
+                <p>The two seats are not equivalent, so the headline number is an average of both. Pinned to one seat over the same 192 MATCHes: <strong>red 21.9%</strong> (621.6 against 663.4) and <strong>blue 32.0%</strong> (627.0 against 660.1). The field itself is more lopsided than that — with the identical greedy plan on both sides, red scores 592.5 and blue 652.3, 60 points apart — so the search still recovers most of the red seat's handicap, and the AI's two seats end up 5.4 points of win rate apart. The Tactics tab's selector picks which seat the AI plans from. <span class="mono">SEAT=red</span> / <span class="mono">SEAT=blue</span> on <span class="mono">ab.mjs</span> reproduces them.</p>
+                <p>The macro search is nearly all of what it has. Pin every ROBOT to "always cycle" and the win rate falls to <strong>4.9%</strong> and the margin to <strong>−86.4</strong>: choosing the per-SHIFT roles, the END GAME ladder and the AUTO posture is worth <strong>+21.4 win points and +50.8 of margin</strong>. Its FUEL targeting is not where it trails either — over six MATCHes greedy collects more (297 against the AI's 222 per ROBOT) but converts far worse (72% against 86%), and pushing the AI's weights towards greedy's plain nearest-pile rule measured <strong>24.6 points worse</strong> on an earlier build, so the deficit is trip count, not aim. <span class="mono">node scripts/gap.mjs</span> prints that comparison.</p>
+                <p><strong>The opponent is a choice.</strong> The Opponent selector beside Plan for picks who drives the other ALLIANCE: the greedy baseline (the default, and what every figure above is measured against), the shoot-always and random baselines, or the same AI on both sides. Both-sides-AI is the honest mirror of your own roster — two searches, two opponent models, roughly twice the cost per MATCH — and it is the mode <span class="mono">scripts/mirror.mjs</span> runs in, which is why the AI's own mirror (589.8) sits well under the pinned all-SCORE one (660.6): each side spends part of its plan on denial, and in a mirror that spending cancels without either side getting the points back. Whichever mode is on, the seat you picked still decides which ALLIANCE's plan, posterior and distribution the panel reads.</p>
+                <p>Reproduce with <span class="mono">ARMS=base,noSearch N=48 FAMILIES=90001,700001,31337,555001 node scripts/ab.mjs</span>, and the defence repricing with <span class="mono">ARMS=base,noDefend EFFS=0 N=48 FAMILIES=90001,700001,31337,555001 node scripts/ab.mjs</span>.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>What this round's physics costs and buys</b><i>square bodies, oriented collision, one Dumper face, turret fire on the move</i></summary>
+              <div class="body">
+                <p>ROBOTs are now squares with a heading, so a body covers a lane according to how it is turned: the block radius is <strong>16.7 in face-on and 22.4 in corner-on</strong> for a 110 in perimeter, plus the ball's own radius. Collisions resolve with a momentum-conserving impulse along the contact normal, split by inverse mass, at a bumper restitution of 0.12.</p>
+                <p>Each piece is an ablation against the pre-rewrite behaviour, two seed families, n=96 per arm, off a base of <strong>24.5% win and −32.6 of margin</strong>. Turning the whole rewrite off at once (<span class="mono">physAllOff</span>) costs <strong>6.8 win points, 42.8 of score and 73.9 of margin</strong> — the largest single effect on this page. Removing the <strong>contact impulse</strong> costs <strong>30.7 of margin and 5.2 of score</strong> and leaves the win rate where it was: games get closer, not better. Taking the <strong>Dumper face gate</strong> off gains the AI 4.5 of score but loses it 11.8 of margin, because the baseline gains 16.3 — a constraint that costs both sides is still a constraint the AI handles better.</p>
+                <p>Two of these changed sign from the previous build, and the honest reading is that the sample is small rather than that the world turned over. With the <strong>turn ramp</strong> removed — a ROBOT snapping its heading inside one tick — the AI wins <strong>4.7 points more</strong> and finishes <strong>8.3 points worse</strong> on margin. It ships anyway: the margin is the statistic that is not at the edge of a ±5-point binomial error, and a car that rotates instantly is the thing a replay shows as fake. The <strong>dark-window gate</strong> trades the same way it always did, only bigger: it is worth <strong>+18.3 points of score</strong> to the AI, because a ball fired into a dead HUB is a ball the hopper was saving for the window that opens next, and it costs <strong>4.7 win points</strong> because greedy was the side wasting more. It ships for the same reason as before — scoring into an INACTIVE window reads as a bug in a replay.</p>
+                <p>Throughput is the calibration anchor and it held: the greedy mirror is <strong>625.2</strong> against the real Einstein average of 627, 0.3% under. It moved 7 points when the intake became a full-width slot on the back face, and the mouth's reach was then set from this same sweep rather than assumed (see "Which face the intake is on").</p>
+                <p>Reproduce with <span class="mono">PHYS=physAllOff,noRestitution,noFaceGate,darkFire,turnRampOff N=48 FAMILIES=90001,700001 node scripts/ab.mjs</span>.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>The levers, measured</b><i>chassis, mechanism, driver, field size</i></summary>
+              <div class="body">
+                <p><span class="mono">node scripts/lever.mjs</span> reruns the pinned all-SCORE mirror (24 MATCHes × 2 seed sets) with one lever moved on every ROBOT at once. The label is the only difference; both sides change together.</p>
+                <p><strong>Chassis</strong> — swerve <strong>660.6</strong>, mecanum <strong>572.4</strong>, tank <strong>479.1</strong>. A tank drive costs about 182 points, 27%, almost all of it in the turn rate: a square ROBOT has to rotate its shooting face onto the HUB, so deg/s is a cycle-time number. Mecanum used to sit within 36 points of a swerve because it strafes instead of turning to change direction; with the mouth on the back it is now <strong>88 points</strong> behind, because the end that has to arrive first is the one its reverse leg drives at 78% of top speed.</p>
+                <p><strong>Mechanism</strong> — turret <strong>698.0</strong>, dumper <strong>610.5</strong>. An 87-point gap: a turret slews independently of the drive, so a slower chassis does not slow its aim, while a Dumper has to point the whole car.</p>
+                <p><strong>Driver</strong> — rookie <strong>601.9</strong>, average <strong>660.6</strong>, good <strong>677.7</strong>, elite <strong>678.6</strong>. The ladder is worth 77 points end to end, more than any mechanism or tactic setting here moves — but it stops paying after good. The last rung is <strong>0.9 points</strong> apart, inside the noise of a 48-MATCH mirror, so nothing beyond a competent driver is worth buying on this model.</p>
+                <p><strong>Field size</strong> — 3v3 <strong>660.6</strong>, 1v1 <strong>341.3</strong>. A lone ROBOT recovers <strong>52%</strong> of a three-ROBOT ALLIANCE. FUEL staging holds either way: §6.3.4 stages a fixed 504, so a benched ROBOT's preload goes back to the NEUTRAL ZONE.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Why the weights have not been retrained</b><i>two offline runs, both refused by the holdout gate</i></summary>
+              <div class="body">
+                <p>The job is small enough to try and too noisy to finish. One evaluation of the same weights on different seed families spreads by <strong>±0.3 to ±0.5</strong> fitness while a real weight change is worth about <strong>0.1</strong>, and forty random mutants of the shipped vector average a full point worse.</p>
+                <p><span class="mono">selfPlay=1</span>, one training family, 10 generations: reported <strong>+0.91</strong> on its training family, then measured <strong>23 to 40 points a MATCH worse</strong> on two families it had never seen. <span class="mono">selfPlay=0</span>, four families, 8 generations: noise floor ±0.28, gain <strong>+0.085</strong> — nothing — and still <strong>−4.6 points of margin</strong> on the holdout.</p>
+                <p>So the shipped weights stay. The honest statement is that this retune needs roughly <strong>150 MATCHes per candidate</strong> against the 32 it gets. <span class="mono">scripts/train.mjs</span> prints its noise floor before starting and refuses a candidate whose holdout margin does not beat twice the standard error.</p>
+              </div>
+            </details>
+          </div>
+          <h3>How the engine models it</h3>
+          <div class="notes">
+            <details class="note">
+              <summary><b>The HUMAN PLAYER</b><i>throw while your HUB is live, dump when it is dark</i></summary>
+              <div class="body">
+                <p>Each alliance fields one HP, staged in its OUTPOST AREA (§6.2-C). The engine runs it as an actor in its own right, off the FIELD and behind the ALLIANCE WALL: no collision body, and every ROBOT is clamped inside the wall, so no ROBOT can reach it (G421).</p>
+                <p><strong>Throw</strong> — the HP takes a FUEL from the CHUTE, or from a CORRAL a ROBOT filled, and throws it into their own HUB. §6.1 says so outright: <span class="mono">HUMAN PLAYERS can deliver FUEL to ROBOTS or score them in their HUB</span>. It aims only at its own HUB, never at an opponent ROBOT (G424); path (C) of G425. Its two settings are the two things you can measure on a person — <strong>throws per second</strong> and <strong>the percentage that go in</strong> — both per alliance at the top of the setup panel.</p>
+                <p><strong>Dump</strong> — the HP rotates the CHUTE DOOR about 90° and the CHUTE's ~25 FUEL slide down the 15° tunnel onto the carpet inboard of the wall (§5.9.2, path (A)). G423-A bars reaching past the tape line while the door is open, so a dump and a throwing cadence cannot run at once. G427 caps what the HP may hold off the FIELD at 2 and requires a full store to enter the FIELD at once.</p>
+                <p><strong>Delivery</strong> — a ROBOT that is full and cannot score drives to the OUTPOST and pushes FUEL in through the 32.0 × 7.0 in opening at the base of the wall (path (B)), and the HP picks it up on the next throw. The engine fires it only when both halves hold: <strong>our own HUB is dark</strong> and the <strong>hopper is full</strong>. Per ROBOT, <span class="mono">Auto</span> / <span class="mono">Off</span>. The CORRAL is one layer of 36 FUEL, so it refuses a ball past that and the loaded ROBOT keeps it.</p>
+                <p><strong>Why the rule is throw-live / dump-dark.</strong> An inactive HUB pays nothing for a throw (Tables 6-3 and 6-4), but §5.4 means the FUEL still goes <em>through</em> the HUB and comes out of one of four exits into the NEUTRAL ZONE — so a dark-window throw is the quickest way to move the CHUTE's 24 off the FIELD and into midfield where ROBOTs reach it.</p>
+                <p><strong>Not re-measured on this build.</strong> The HP's point figures this page carried (≈60 a match; rule 34% / hold 31% / always throw 43% / always dump 21% over 96 AI-vs-greedy MATCHes each) predate the square-body and chassis rewrite. They are direction only. Dumping all match was clearly the worst of the four, 22 points behind always throwing; the rule and always throwing could not be told apart. An HP that does nothing is legal and leaves all 24 FUEL off the FIELD for the whole match — set both throw rates to 0 to watch that build.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Sweep while you shoot</b><i>the roller and the shooter are separate mechanisms</i></summary>
+              <div class="body">
+                <p>The roller keeps turning during SCORE and PASS — pickup still falls off with speed and still obeys the mouth's face band and defensive pressure — while bulldozing turns it off on purpose, since otherwise the ROBOT collects the FUEL it means to push away. In the replay the intent glyph <span class="mono">Sc+</span> / <span class="mono">Pa+</span> means the ROBOT picked up while shooting or passing; the <span class="mono">+</span> is yellow.</p>
+                <p>What it rewards is dumping early: a Dumper that only fires when full has a full hopper, so it cannot take anything in. Over 6 MATCHes the roller runs on <strong>52940 ticks</strong> and actually swallows a FUEL on <strong>7591</strong> of them (14%), and those ticks include SCORE and PASS, not just INTAKE.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Defence really blocks shots</b><i>oriented block radius: 16.7 in face-on, 22.4 in corner-on</i></summary>
+              <div class="body">
+                <p>A shot is a straight line from the BUMPER to the HUB mouth, so an opponent body on that line stops the ball: each tick's flight segment is swept against every opponent ROBOT. How much lane a ROBOT covers depends on how it is turned — <span class="mono">shotBlockRadius()</span> projects its square footprint onto the lane normal and adds the ball's radius, giving <strong>16.7 in face-on and 22.4 in corner-on</strong> for a 110 in perimeter. <span class="mono">SHOT_BLOCK_RADIUS_IN</span> (22) is the corner-on worst case, for a policy that cannot know how the defender will be turned.</p>
+                <p>A blocked ball drops as loose FUEL and can be picked up again. It scores nothing and draws no foul: G404 punishes <strong>deliberately</strong> launching at an opponent, and stepping into a shot lane is the defender's own choice. In the replay the stream line stops on the ROBOT that blocked it. The Numbers table has Shots blocked and Blocks columns.</p>
+                <p>The fast model cannot see a blocked shot at all — a body in a lane is a geometric event, and the analytic model is a flow of FUEL per second — so <span class="mono">defenseEfficacy</span> now ships at <strong>0</strong> and the search does not buy defence it cannot price. The engine still blocks the shot; the planner just does not know that is worth anything. That is the honest direction for the gap: a value the model cannot represent should be zero, not a guess the search then spends real FUEL on.</p>
+              </div>
+            </details>
+          </div>
+          <div class="notes">
+            <details class="note">
+              <summary><b>Hard contact between ROBOTS: G415 / G416 / G417</b><i>off by default — the fouls are priced, the card is not</i></summary>
+              <div class="body">
+                <p>§7.4.4 is the opponent-interaction family, and all three rules need more than contact. <strong>G415</strong> covers a ROBOT whose BUMPERS were <em>completely outside</em> its ALLIANCE ZONE that damages or impairs an opponent by initiating contact, <strong>G416</strong> covers intentional or reckless damage anywhere on the FIELD, <strong>G417</strong> covers a deliberate attach, tip or entanglement. Each is a <span class="mono">MAJOR FOUL</span> and a <span class="mono">YELLOW CARD</span>, escalating to a <span class="mono">RED CARD</span> when the opponent can no longer drive. Ordinary play is not a violation: G415's example A is a hit inside the PERIMETER with "no damage seen so no violation is assigned", and G416's example G is a high-speed BUMPER-to-BUMPER hit that is <em>not</em> reckless. So the engine assesses one only when the contact is hard enough to be a candidate <em>and</em> the roll says something broke, and one interaction is one foul.</p>
+                <p>Severity is the closing speed when the BUMPERS first overlap, scaled by how much heavier the rammer is. Measured inside the engine over 10 AI-vs-greedy MATCHes (661 collisions): median <strong>18 in/s</strong>, p90 95, p95 143, max 196. Candidates start above <strong>130 in/s</strong> with a break chance ramping from 0 to at most 15%; a deliberate DEFEND hit above 185 tips it and above 190 knocks the drive out. A damaged ROBOT keeps 70% of its driving, shooting and intaking for 15 s; one that cannot drive is at zero for 20 s, the manual's own "approximately ~20+ seconds".</p>
+                <p><strong>The break probability is the one guess.</strong> Nothing in the manual says how often a hard hit damages a ROBOT, so it is calibrated to land near what the real finals show: 0, 1 and 2 fouls a MATCH across the three Einstein finals.</p>
+                <p><strong>Two gaps.</strong> G417's <em>entanglement</em> half is not modelled — hooking two ROBOTS together needs a mechanism this 2-D model does not have. And the engine records the card without pricing it: a second YELLOW in a phase is a RED, which is a DISQUALIFICATION, and that is the deterrent that stops teams ramming. Without it a 15-point foul buys 20 s of an impaired opponent, which measures as a good trade. That is why the family ships <strong>off</strong>.</p>
+                <p>The MCTS fast model does not see contact fouls at all, so the AI neither seeks nor avoids them. On the score the switch is close to free: the AI's own mirror moves from <strong>589.8 to 586.8</strong> with the fouls on (n=48), 3 points, which is inside the ±2% a mirror carries. The greedy mirror does not move at all — <strong>625.2</strong> either way — because the hand-written cycling plan never makes a deliberate hit, which is the case the rules actually charge.</p>
+                <p><strong>Who is charged, and a bug that paid the wrong side.</strong> Every foul the engine logs carries the ROBOT that committed it, the ALLIANCE it was assessed against and the clause, and the Numbers tab now lists them in match order with a jump to the second it happened; the batch view averages the same thing per ROBOT. Building that list is what found the bug: G418 (a PIN over 3 s), G419 (closing the traversal corridors) and G415/G416/G417 were all being charged to the <em>victim's</em> alliance, so the side that pinned, blocked the band or rammed an opponent kept the points. G408, G420 and G427 were right. The verifier's own check only compared the label on the event with the offender's colour, so it passed while the arithmetic handed the points the wrong way. Both are fixed: the engine charges the offender, and the guard now asserts that the foul is assessed against the rammer's own ALLIANCE. It is worth saying what that changed about the conclusion — with the bug, defending earned the AI points, and the ablation said removing DEFEND cost 6.3 win points. Without it, DEFEND is worth nothing to a model that cannot see a blocked shot, and the shipped <span class="mono">defenseEfficacy</span> is 0.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Passing and bulldozing</b><i>per ROBOT, and the AI will not pass</i></summary>
+              <div class="body">
+                <p>These are tactical choices rather than specs, so they sit on each ROBOT's card. <strong>Passing:</strong> <span class="mono">Off</span> / <span class="mono">Careful</span> (only if a teammate is on the FIELD with room and the throw saves at least 150 in over driving it home) / <span class="mono">Aggressive</span> (past midfield with a third of the hopper, throw to open space in your own half; the landing spot avoids the HUB mouth and outlet area so you do not draw G408 while collecting). <strong>Bulldozing:</strong> <span class="mono">Off</span> / <span class="mono">Passive</span> (push only on contact) / <span class="mono">Active</span> (drive around the far side of loose FUEL and shove it back toward your half).</p>
+                <p><strong>A pass scores nothing</strong> (landing bonus is always 0) and a target inside 40 in of your own HUB is rejected. Whether you may pass at all comes down to the scope of <strong>G407</strong>: the TU21 text (p.65) is titled "Only score while in your ALLIANCE ZONE" and its body reads only <span class="mono">A ROBOT may not launch a SCORING ELEMENT into their HUB unless their BUMPERS are partially or fully within their ALLIANCE ZONE</span>. That covers the shot into the HUB, not a ball thrown elsewhere, so passing is not under G407. <strong>G404</strong> and <strong>G405</strong> do apply, and the engine satisfies both by construction: the target is a teammate in your own half or a spot in your ALLIANCE ZONE, never an opponent, clamped inside the boundary.</p>
+                <p>Bulldozing pushes loose FUEL within 22 in along the direction of travel, with force proportional to speed (0.8), on the grounds that G408 explicitly excludes "bulldozing" and "deflecting" from CONTROL. FUEL is stopped by structures the same way a ROBOT is, so nothing gets pushed inside the TOWER body — otherwise a ball nobody can reach pins a ROBOT for a whole MATCH, a trap the engine fell into during testing. A ROBOT bulldozing on purpose does not run its roller, or it would collect instead of push.</p>
+                <p><strong>Passing is a tactic you can use but the AI will not</strong>: the fast model cannot price its payoff, so it is not in the search. The measured figures this page carried — loosening Careful dropped the win rate from 25% to 6%, Aggressive fires but costs about 63 points, bulldozing is worth about 99 on the mirror — all predate the square-body rewrite and have not been re-measured.</p>
+              </div>
+            </details>
+          </div>
+          <div class="notes">
+            <details class="note">
+              <summary><b>Square bodies, chassis and turn rate</b><i>new fields on every ROBOT card</i></summary>
+              <div class="body">
+                <p>A ROBOT is a square now — drawn with rounded corners, its footprint half-width <span class="mono">perimeterIn / 8</span> — and its heading is first-class state, integrated each tick under a turn-rate limit rather than snapped to the direction of travel.</p>
+                <p><strong>Chassis</strong> is per ROBOT and sets three multipliers on top of its drive speed. <span class="mono">Swerve</span> translates in any direction and spins in place at full rate: lateral 1.0, reverse 1.0, turn-at-speed 1.0, reference 540 deg/s. <span class="mono">Tank drive</span> drives only along its heading or reversed: lateral 0, reverse 0.6, turn-at-speed 0.55, reference 300 deg/s. <span class="mono">Mecanum</span> strafes without turning but loses grip doing it: lateral 0.62, reverse 0.78, turn-at-speed 0.75, reference 200 deg/s — all four wheels scrub sideways, so rotating in place is its weakest move.</p>
+                <p><strong>Turn rate deg/s</strong> is its own editable field. Changing the chassis resets it to that chassis's reference — unless the number in the box is one you typed yourself, in which case it is a measurement and is left alone.</p>
+                <p>The peak rate is a ceiling, not a step. Each chassis also carries a <strong>ramp time</strong> — swerve 0.25 s, tank 0.35 s, mecanum 0.30 s — and the engine integrates the spin rate against it, so a turn is a trapezoid: a drivetrain has to build the spin up against the carpet and bleed it off again, and it cannot reverse direction inside one tick. Those three ramp times are estimates from what each drivetrain has to do physically, not measurements of a specific robot; the peak rates are the ones a card can override. Ablating the ramp (<span class="mono">PHYS=turnRampOff</span>, n=96) — letting a ROBOT snap its heading inside a tick — is worth <strong>8.3 points of margin</strong> to the AI and costs it <strong>4.7 win points</strong>, so the two statistics disagree and the win-rate half sits at the edge of the ±5-point noise. It ships anyway: a drivetrain with traction cannot reverse its spin in 0.1 s, and an instant rotation is exactly what a replay shows as fake. The previous build measured this the other way round, at −9.4 win points.</p>
+                <p>Both matter because a square ROBOT with one shooting face has to <em>rotate</em> onto the HUB. On the pinned mirror a tank drive costs <strong>182 points</strong> against a swerve (479.1 to 660.6). Mecanum sits <strong>88 points</strong> under a swerve at <strong>572.4</strong>: it strafes rather than turning to change direction, which used to make it nearly as good as a swerve, until the intake mouth moved to the back face and its 78% reverse leg became the end that has to arrive first.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Which face the intake is on</b><i>a full-width slot, and Back is the default</i></summary>
+              <div class="body">
+                <p>The mouth is a slot across the whole face, which is what a roller intake actually is: bumper to bumper, not a narrow opening. The engine's test is a band, not a cone — FUEL is inside the mouth if it lies within the car's own width across the face and within <span class="mono">MOUTH_REACH_IN</span> of the face line. The card offers <span class="mono">Front</span>, <span class="mono">Back</span>, <span class="mono">Left side</span> and <span class="mono">Right side</span>, the replay draws the teal bar on whichever face you picked, and the engine rotates the same band by the same bearing, so the picture and the physics cannot drift apart.</p>
+                <p><strong>Back is the default on every ROBOT now.</strong> A Front mouth and a front-mounted Dumper shooter want the same 24 in of bumper — one edge cannot carry a roller and an opening at once — so the default moved to the face that is free. A turret car has no fixed shooting face and may still put the roller in front; that is a choice on the card now, not the assumption underneath every number on this page.</p>
+                <p><strong>The reach is the one guessed number, and the mirror settles it.</strong> Width comes from the chassis and is not a guess; how far <em>behind</em> the face line the rollers still grab is. Sweeping it over the greedy mirror: 6 in <strong>625.2</strong>, 8 in 635.7, 10 in 642.8, 12 in 642.9, 14 in 645.2 — against the real Einstein Finals average of <strong>627</strong>. Six inches is what ships, and it is the reason the calibration anchor is now 0.3% under rather than 2.9% over.</p>
+                <p>What follows from a face is that a ROBOT sweeps a pile by <em>leading with the mouth</em>. On a COLLECT trip the car turns the intake face toward where it is going and trails the rest behind it, so a rear intake backs into every pile at the chassis's reverse fraction of top speed, and a side intake has to strafe. STOCKPILE is exempt — a positioning move, and a ROBOT hurrying home before its HUB opens should not have to reverse the whole way. PUSH is exempt because a pusher wants a BUMPER on the pile, never the mouth. <strong>FEED is exempt too, and that one was caught by a test:</strong> its destination is a wall opening the car has to park beside, and leading with a rear mouth backed the ROBOT into the OUTPOST and lost the CORRAL mouth — delivery fell to zero.</p>
+                <p>On a swerve the face barely registers. Pinned mirror, 24 MATCHes × 2 seed sets: <strong>662.7 / 660.6 / 657.2 / 662.6</strong> front to right — a 5.5-point spread on 660, inside the noise floor. A swerve strafes and spins in place at full rate, so it can lead with any face at almost any speed.</p>
+                <p>A tank drive is where it bites: <strong>473.1</strong> front, <strong>479.1</strong> back, <strong>430.6</strong> left, <strong>430.2</strong> right. Sides cost about 45 points because a tank has no strafe to lead with — it keeps driving nose-first and only swallows what the flank brushes past. The rear mouth still edges the front one by 6, because the tank's reverse leg already points the car away from travel, so a mouth on the back is the end that arrives first instead of trailing blind.</p>
+                <p><strong>What moving the default cost.</strong> The pinned all-SCORE mirror went from 669.2 (front, cone) to <strong>660.6</strong> (back, full-width slot at 6 in): 8.6 points, most of it in the turn a ROBOT now spends presenting its rear to a pile before it can eat. The chassis that pays most is mecanum — 633.5 to <strong>572.4</strong> — because it leads with a face its reverse leg only reaches at 78% of top speed.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Where each ROBOT starts</b><i>§5.3 STARTING LINE, G303-D</i></summary>
+              <div class="body">
+                <p>§5.3 defines the ROBOT STARTING LINE as "an ALLIANCE colored line that spans the width of the FIELD at the edge of an ALLIANCE ZONE in front of two BUMPS and an ALLIANCE HUB", and G303-D makes every ROBOT start with its <strong>BUMPERS overlapping that line</strong>. Each card carries a Starting position: <span class="mono">Auto</span> gives the three DRIVER STATIONS the three structures the line runs in front of — 1 at a BUMP, 2 at the HUB, 3 at the other BUMP — and you can override any ROBOT to <span class="mono">In front of a BUMP</span>, <span class="mono">Under a TRENCH</span> or <span class="mono">In front of the HUB</span>. Two ROBOTS told to take the same lane line up 34 in apart instead of starting on top of each other.</p>
+                <p>One honest deviation: this engine's BUMPS, TRENCHES and HUB straddle the ALLIANCE ZONE line rather than sitting beyond it, so a ROBOT centred on the line would stand inside the structure in its lane. Each start is therefore set 38 in inside the line, as far forward as its lane allows, and the verifier checks both the lane and that the start is inside the ALLIANCE ZONE and clear of the band.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Who is driving, and who is on the field</b><i>the driver is the biggest single lever on this page</i></summary>
+              <div class="body">
+                <p><strong>Driver</strong> is the person in the box (Table 6-1: a DRIVE TEAM's DRIVERS are STUDENTs, up to 3 per team, shared between driving and the HUMAN PLAYER role). It moves the three things a driver actually controls: <strong>aim</strong>, <strong>how long the mechanism takes to come on target</strong>, and <strong>how much they get out of the ROBOT on defence</strong>. Rookie takes 0.10 off a reference driver's shot accuracy and needs half again as long to line up; Elite adds 0.05 and lines up in 70% of the time. Aim is a flat offset rather than a multiplier because every reference ROBOT already sits at 0.92–0.93, so multiplying would pin them all at 1.000 and erase the difference between two good teams. <strong>Average is the reference the rest of this page is measured on.</strong> Driving itself is not scaled: the engine's path following is closed-loop, so the "driver" in that loop is the controller, and the AI plans against the same effective numbers.</p>
+                <p>Measured on the pinned mirror, 24 MATCHes × 2 seed sets, the ladder is <strong>601.9 rookie / 660.6 average / 677.7 good / 678.6 elite</strong> — 77 points end to end, and the last rung is inside the noise. <span class="mono">node scripts/lever.mjs</span> reproduces it.</p>
+                <p><strong>Off the field</strong> benches a ROBOT: no start position, no preload, never in the replay, and the DRIVER STATIONS close up around it. Field one a side and the MATCH is a 1v1 — a simulation setting, not a legal configuration, since in a real MATCH every team fields its ROBOT. Measured the same way, a 1v1 scores <strong>341.3</strong> against the 3v3's <strong>660.6</strong>, so a lone ROBOT recovers <strong>52%</strong>. FUEL staging holds either way: §6.3.4 stages a fixed 504, so a benched ROBOT's 8-FUEL preload moves back into the NEUTRAL ZONE instead of the FIELD shrinking.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>The inactive window: no idle rule, no wasted shots</b><i>50 s an alliance cannot score, spent as an ordered ladder</i></summary>
+              <div class="body">
+                <p>Under Table 6-3 the alliance that loses AUTO is inactive in SHIFT 1 and 3, and the winner in SHIFT 2 and 4, so every alliance has <strong>50 seconds</strong> where it cannot score. The AI turns that into an ordered ladder: <strong>bulldoze</strong> (if set to Active, use the free time to push loose FUEL back) → <strong>sweep</strong> (keep loading if there is room) → <strong>come home</strong> (inside <span class="mono">darkPrepSec</span> = 4 s of the HUB going live, a ROBOT that is carrying stops whatever it was doing and holds its own shooting lane) → <strong>deliver</strong> to the HUMAN PLAYER → <strong>defend</strong> → <strong>pass</strong> → <strong>block</strong> → <strong>hold position</strong>. Even the last rung is not IDLE, and a full ROBOT never pretends to sweep — a full intake cannot take anything in. After a MATCH, What the match tells you reports how that stretch was spent.</p>
+                <p><strong>Nothing scores into a dead HUB.</strong> A FUEL that goes in during an INACTIVE window still passes through the HUB and out into the NEUTRAL ZONE (§5.4), so it is relocated, not deleted — but it scores 0, and it is 0 the alliance paid to carry. The engine used to volunteer one such shot on its own: a turret sweeping past its reference distance fired opportunistically with no check on whether its HUB was live, which emptied the hopper the policy was banking for the next window. That shot is now gated. What is <em>not</em> gated is a policy that deliberately dumps into a dead HUB — that is a choice, it is legal, and the greedy baseline keeps making it.</p>
+                <p><strong>Both rungs measured, twice.</strong> Coming home early is worth <strong>+7.5 points of score and +2.9 of margin</strong> against never coming home at n=192 (<span class="mono">PREPS=0</span>, four disjoint seed families); on win rate the two arms are <strong>26.3% against 27.3%</strong>, which is inside the ±3.5-point binomial error of an arm that size, so the score and the margin are the evidence and the win rate is not. The longer version was the more instructive one: at n=96 a <strong>8 s</strong> lead looked worth <strong>+13.0 win points</strong> over 4 s, which is the kind of number that makes you change a shipped constant. Re-run over four seed families instead of two it shrank to <strong>+4.2 win points, −1.2 of score</strong>, carried almost entirely by one family (90001 +19.8, 700001 +6.2, 31337 −2.1, 555001 −7.3), and 12 s and 16 s came in behind 4 s on score and margin. So <strong>4 s still ships</strong> and the sweep's ceiling went back to 8. <strong>Loading sits ahead of defending</strong> because it measured better: ROBOTS used to switch to defence at 81% hopper, and moving to load-full-first changed two non-overlapping 24-MATCH seed sets from 594.8 → 625.5 and 604.0 → 639.2. Those figures predate the current build; what has not been contradicted is that DEFEND is not where the points are — on this build removing it outright is worth a couple of win points and nothing else.</p>
+                <p>Reproduce with <span class="mono">MATCHES=8 node scripts/dark.mjs</span>, which tallies the intent mix, the shots fired at a dead HUB and the passes thrown during every INACTIVE frame, for the AI and the baseline separately; <span class="mono">node scripts/gap.mjs</span> prints the same two drivers' collected / scored / wasted / distance side by side; and <span class="mono">ARMS=base PREPS=0,8,12,16 N=48 FAMILIES=90001,700001,31337,555001 node scripts/ab.mjs</span> sweeps the come-home rung.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Teamwork, and one time-aware idea that lost</b><i>two ROBOTS on one pile; a rejected weight</i></summary>
+              <div class="body">
+                <p>The defect was measurable before it was fixed. On the build it was found on, over 6 MATCHes against greedy, <span class="mono">scripts/team.mjs</span> counted the AI's ROBOTS within a bumper of each other on <strong>22.1%</strong> of frames and driving at the same pile on <strong>6.7%</strong>, and a ROBOT carrying FUEL was on average <strong>104 in</strong> from its own HUB when the window opened. Greedy, with no notion of a partner at all, was worse on every one of those: 33.8% / 14.6% / 146 in. So the AI was already the better teammate and still bunching a fifth of the time.</p>
+                <p>Two ROBOTS on one pile do not empty it any faster and spend the trip shoving each other. <span class="mono">mateSeparation</span> = 0.6 prices a candidate pile down by how close a partner is — measured both to the partner's body and to the target the partner is already driving at, because a partner 200 in away is still going to arrive first. The penalty falls to nothing at <span class="mono">MATE_SEP_IN</span> = 72, about two car widths, so it spreads the ALLIANCE out without forbidding two ROBOTS from ever being near each other. Zero turns it off and leaves only the per-tick grid claim, which is the control it was measured against.</p>
+                <p><strong>Re-measured on this build it is a split decision, and the split is the interesting part.</strong> Turning it off costs <strong>5.0 of score and 5.3 of margin</strong> (n=192, four families) and <em>raises</em> the win rate by <strong>3.4 points</strong>. On the previous build the same ablation read +11.0 score, +5.6 margin and +2.9 win points — all one direction. The win-rate difference here is inside the ±3.5-point binomial error of a 192-MATCH arm, while score and margin are the tighter statistics and both say keep it, so it ships; the honest statement is that a teamwork term worth about 5 points of score is not visible as a win-rate effect at this sample size. The proxies on the current build: the AI bunches on <strong>20.1%</strong> of frames and double-taps a pile on <strong>5.1%</strong>, against greedy's 34.6% and 14.0%, and carries a load <strong>100 in</strong> from its own HUB at a window opening against greedy's 151. It still out-teames the baseline on all three.</p>
+                <p><strong>One time-aware knob was built, measured and deleted.</strong> <span class="mono">lateTripPenalty</span> priced down a pile whose round trip would overshoot the live window, which is the obvious thing to try. It worked on the proxy: caught-far fell from 104 to 92 in. It cost <strong>5.7 win points</strong> at n=96, on the build it was added to. The reason is that banking a load into the dark window is not a loss — <span class="mono">darkPrepSec</span> brings the ROBOT home and it scores on the tick the HUB reopens, so the penalty was steering ROBOTS off trips that were already fine. The weight, its bound and its code are gone rather than shipped pinned at zero. The proxy metric moved and the win rate went the other way; that is the whole argument for measuring every knob against a control.</p>
+                <p>Reproduce with <span class="mono">MATCHES=6 node scripts/team.mjs</span> and <span class="mono">ARMS=base SWEEP="mateSeparation:0" N=48 FAMILIES=90001,700001,31337,555001 node scripts/ab.mjs</span>.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Crossing the field (BUMP / TRENCH)</b><i>§5.7 height rule</i></summary>
+              <div class="body">
+                <p>The default follows §5.7: a ROBOT at or below 22.25 in can take the TRENCH. The crossing control on each card can be set to <span class="mono">TRENCH + BUMP</span> / <span class="mono">BUMP only</span> / <span class="mono">TRENCH only</span> / <span class="mono">Neither</span>, to record what you scouted — say, a ROBOT short enough but still unable to climb the BUMP. If the setting conflicts with the height rule the card says so, so you can tell a deliberate entry from a mistake. A ROBOT that can cross neither is held out of the corridor band on its own side. That is the engine's honest result, not a bug.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>Turret or Dumper</b><i>87 points apart, and they now fail differently</i></summary>
+              <div class="body">
+                <p>A <strong>turret</strong> slews onto the HUB independently of the chassis, so it fires from anywhere in its ALLIANCE ZONE, while still rolling, with almost no time to come on target (0.1 s). A <strong>full-width Dumper</strong> has to reach the HUB face, stop, and wait out a much longer spin-up (1.5 s) before the whole hopper leaves at once.</p>
+                <p>These followed from making the body a square. The <strong>Dumper has one shooting face</strong>: it scores only through the pale edge drawn on the replay, within <span class="mono">DUMPER_FACE_TOL_DEG</span> = 20° of the bearing to the HUB. Turning is part of its cycle time, so its turn rate is a scoring stat. The gate is priced rather than sold: taking it off (<span class="mono">PHYS=noFaceGate</span>, n=96) gains the AI <strong>4.5 of score and 4.2 win points</strong> but costs it <strong>11.8 of margin</strong>, because the baseline gains 16.3 — a constraint that binds both sides is worth having if you handle it better. The <strong>turret fires on the move</strong>: within <span class="mono">TURRET_OPPORTUNITY_MARGIN_IN</span> = 70 in past its reference distance it takes a shot it did not stop for, because a miss costs little — the ball comes down as loose FUEL and is re-collectable. An earlier build reported a clean ladder over that margin, and it did not survive re-measurement: sweeping 0 / 10 / 20 / 40 / 70 gave <strong>41.7 / 33.9 / 35.9 / 39.6 / 40.6%</strong> on the build before this one, spread without a trend, with the top of it sitting on the value that switches the behaviour off. So 70 ships as a physical reach — how far past its lane a turret can still hit — and not as a sweep winner, and that figure is labelled as the older measurement rather than restated as current.</p>
+                <p>On the pinned mirror the gap is <strong>turret 698.0 against dumper 610.5</strong>, 87 points — wider than the 49 an earlier build reported, because a turret slews independently of the drive, so the turn limit does not slow its aim, while a Dumper has to point the whole car. The turret's own aim time barely matters; its score did not move between 0 and 0.15 s, also from the earlier build.</p>
+              </div>
+            </details>
+            <details class="note">
+              <summary><b>The net behind the HUB, and FUEL that never stacks</b><i>§5.4 and §5.10.1</i></summary>
+              <div class="body">
+                <p>§5.4: "A net structure located in the back of the HUB prevents FUEL launched from most prohibited areas from entering the opening." The prohibited areas are outside your own ALLIANCE ZONE and the HUB sits exactly on the zone line, so a ROBOT firing at its own HUB from behind it is shooting into the net. The engine enforces this where it is cheapest and most honest: <strong>the launch never leaves the hopper</strong>, so the ROBOT keeps its load and drives back in, and G407 stays a rule rather than a foul the AI farms. The same net stops a shot that simply misses — the opening sits on a solid prism, so a ball that does not go in cannot come out the far side. It strikes the structure and comes down at the base of the face it hit, in the shooter's own ALLIANCE ZONE. The old code dropped a missed shot 20–95 in <em>past</em> the HUB centre; over two greedy mirrors 43 of 60 misses used to come to rest beyond that edge, the worst 72 in past it, and with the net catching them none do. The verifier pins both halves. The net is not drawn; it is a physical gate, not furniture.</p>
+                <p>Two FUEL are balls on the carpet and cannot share a point. §5.10.1 makes each one a 5.91 in foam ball, and every landing is an independent random draw, so balls used to land stacked — which read as a rendering bug and let one sweep take two off the same inch. Every landing now goes through one placement helper: expel the ball from any structure it came down inside, then nudge it off any loose ball it would overlap to one diameter apart. The opening layout was the worst case, because the 206 × 72 in NEUTRAL ZONE box holds 360 FUEL — past the density where a uniform scatter jams — so its fallback spot now goes down on a jittered hexagonal lattice one diameter across, which reads as a corral rather than a grid. It is a placement fix, not a continuous separation pass, so it does not stir the piles the MATCH itself builds.</p>
+              </div>
+            </details>
+          </div>
         </div>
       </aside>
     </main>
 
     <footer>
-      <span>规则依据：2026 FIRST Robotics Competition Game Manual, REBUILT presented by Haas, Version TU21（166 页）。</span>
+      <span>Rule sources: 2026 FIRST Robotics Competition Game Manual, REBUILT presented by Haas, version TU21 (166 pages).</span>
       <span>
-        「参照机型」每台都标了<strong>来源链接</strong>：原文能读到的机构类型、爬塔级别、料仓容量按原文填（如 4414 的 85+ 球料仓、1690 的 13 BPS、1678 爬 L1），读不到的才估。数值仍多为<strong>估计值</strong>，非实测，也不代表这些队伍的真实表现；要用来做决策，请填自家侦察数据。
+        Each reference robot links to a <strong>source</strong>. Mechanism, climb level and hopper capacity come from it where it says so; the rest are <strong>estimates</strong>, not measurements, and do not describe what these teams did. For decisions, put in your own scouting data.
       </span>
     </footer>
 

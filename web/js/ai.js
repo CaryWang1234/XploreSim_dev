@@ -13,7 +13,7 @@
 // Every number a policy uses about the OPPONENT comes from a noisy scouting report plus in-MATCH
 // observation, never from the opponent's true parameters.
 
-import { TIME, POINTS, FIELD, hubActiveTable } from './rules.js';
+import { TIME, POINTS, FUEL, FIELD, hubActiveTable } from './rules.js';
 import { GEO, INTENT } from './engine.js';
 import {
   ROLE,
@@ -41,11 +41,15 @@ export const DEFAULT_WEIGHTS = {
   // fast-model shape (also evolved, because they steer which strategy looks best)
   traversalOverhead: 1.6,
   aimOverhead: 0.8561,
-  // Measured against the engine, not tuned by feel: a ROBOT sent to shadow an opponent costs its own
-  // ALLIANCE about 180 points (it stops cycling) and takes only about 20 off the victim, so the
-  // model's per-defender suppression has to be small or the search defends because the model told it
-  // to. 0.06 reproduces that ~20-point effect at the presets' defenceSkill.
-  defenseEfficacy: 0.06,
+  // 0 ships, and it is a measurement rather than a guess. With any positive value the search buys
+  // DEFEND with the ROBOT's own collection trips, and on this build that trade loses: setting this to
+  // 0 was better in all four seed families it was tested on, worth +13.0 of margin and +8.0 of score at
+  // n=192 against greedy (+2.9 win points, which is inside the ±3.5-point binomial error of an arm that
+  // size — the margin and the score are the signal). An earlier build showed the opposite sign because
+  // the engine credited G418/G419/G415-417 fouls to the side that COMMITTED them; with that fixed, a
+  // defender's pin costs points instead of earning them. DEFEND still blocks shots in the engine, which
+  // this model cannot see at all, so 0 prices what is measurable and stays silent about the rest.
+  defenseEfficacy: 0,
   bankCredit: 0.2434,
   // FUEL cluster targeting
   clusterDensity: 1.0419,
@@ -54,6 +58,11 @@ export const DEFAULT_WEIGHTS = {
   clusterOwnHalfBias: 0.2575,
   clusterStickiness: 0.7216,
   targetRefreshSec: 0.6,
+  // How hard a candidate pile is priced down for having a partner near it, at the partner's body or at
+  // the target the partner is already driving at. Two ROBOTs on one pile empty it no faster and shove
+  // each other doing it. 0 turns separation off and leaves only the per-tick grid claim, which is the
+  // control this value was measured against: worth 7.3 win points and 6.2 of score at n=96.
+  mateSeparation: 0.6,
   // tempo. dumpThreshold was pinned at 1.0 (the old upper bound), which meant the AI would only ever
   // score a completely full hopper: it would spend a whole SHIFT filling and then miss the window,
   // travel more than the greedy baseline and score less. The bound now reaches down to 0.15 so the
@@ -64,6 +73,22 @@ export const DEFAULT_WEIGHTS = {
   // While our own HUB is inactive the opponent's is the active one (Table 6-3), so a ROBOT that is
   // this full cannot bank any more and goes to deny their window instead of waiting at our HUB.
   pressWhenIdleFrac: 0.8083,
+  // How many seconds before our HUB goes live a carrying ROBOT stops denying and goes to hold on its
+  // own shooting lane. Denying is worth something, but the SHIFT opens with a burst: a ROBOT that is
+  // still parked on the opponent's shooter when it does has to drive home empty-handed while its
+  // partners dump, and the load it was holding is the one thing that could have scored on the first
+  // live tick. 0 turns the rung off, which is the control the value was measured against.
+  darkPrepSec: 4,
+  // PASS: how full a collector on the far half has to be before it throws its load back to a partner
+  // instead of driving it home itself. This is the `auto` posture — the conservative one, and the
+  // shipped default for every ROBOT. It is deliberately strict: measured over 24 MATCHES against the
+  // greedy baseline, relaxing it (0.6 fill, 90 in margin) did not move the average score but cut the
+  // win rate from 25% to 6%, so the AI's plan search cannot yet price a pass correctly and the play
+  // stays user-driven. Set a ROBOT to `eager` to use it.
+  passWhenFarFrac: 0.85,
+  // PASS (eager posture): the load only has to be worth a throw, because an eager ROBOT will aim at
+  // its own ALLIANCE ZONE even when no partner is there to catch the FUEL.
+  passEagerFrac: 0.34,
   // defence
   defendCarryWeight: 0.4407,
   defendThreatWeight: 0.5,
@@ -99,10 +124,16 @@ export const WEIGHT_BOUNDS = {
   clusterOwnHalfBias: [0, 1.2],
   clusterStickiness: [0.1, 1.2],
   targetRefreshSec: [0.2, 2.0],
+  mateSeparation: [0, 3],
   dumpThreshold: [0.15, 1.0],
   dumpBeforeIdleFrac: [0.1, 0.8],
   dumpBeforeIdleSec: [1, 8],
   pressWhenIdleFrac: [0.5, 1.0],
+  // 8 s looked worth +13 win points at n=96 and lost it at n=192, so 4 stays shipped. The ceiling is
+  // 8 because that is as far as the measurement carried before it went the other way.
+  darkPrepSec: [0, 8],
+  passWhenFarFrac: [0.4, 1.0],
+  passEagerFrac: [0.1, 0.9],
   defendCarryWeight: [0.1, 1.5],
   defendThreatWeight: [0.1, 1.5],
   climbTraversalFocus: [0, 3],
@@ -122,6 +153,50 @@ export function clampWeights(w) {
 
 export function cloneWeights(w) {
   return clampWeights({ ...DEFAULT_WEIGHTS, ...w });
+}
+
+// The HUMAN PLAYER's own decision (§6.1). It is keyed to the HUB window rather than to a scripted
+// feed rate, because the window is what decides the value of a FUEL: an active HUB pays a point for
+// a throw (Table 6-4), an inactive one pays nothing, so a throw during a dark window spends FUEL off
+// the FIELD for no return at all.
+//
+//   HUB active   -> throw at it. Measured on the elite mirror, banking the CHUTE this way beats
+//                   dumping it: 619 vs 607 MATCH points, and in AI-vs-greedy 52% vs 41% over 96
+//                   MATCHES. A scored FUEL is not lost either, it recirculates to the NEUTRAL ZONE
+//                   (§5.4).
+//   HUB inactive -> dump. The FUEL cannot score now, so it is worth more on the carpet in our own
+//                   ALLIANCE ZONE, where a ROBOT reaches it without the trip across the FIELD. Below
+//                   four FUEL the door swing costs more than it moves, so the HP holds instead.
+//
+// Shared by the AI and every baseline on purpose: an AI-vs-baseline number has to isolate the ROBOT
+// policy, not quietly also differ in how the two sides use their OUTPOST.
+export function humanChoice(obs, side) {
+  const pool = obs.pools[side];
+  const hp = obs.human[side];
+  if (hp.h + pool.chute + pool.corral === 0) return 'HOLD';
+  if (obs.hub[side]) return 'SCORE';
+  return pool.chute >= 4 ? 'DUMP' : 'HOLD';
+}
+
+// How much FUEL a ROBOT should leave queued at the OUTPOST before it stops delivering. The HP throws
+// at humanThrowPerSec, so this is roughly what one alliance SHIFT of throwing clears: past it a
+// delivery is FUEL parked off the FIELD where no ROBOT can reach it and no HP has time to throw it.
+export const OUTPOST_QUEUE_MAX = 12;
+
+// §5.9.2 is what makes this legal at all: the OUTPOST's bottom opening is where "ROBOTs can push FUEL
+// into the CORRAL", and the OUTPOST exists so that "ROBOTs can deliver FUEL to their HUMAN PLAYERS".
+// The trade is time against FUEL: the CORRAL takes a load the ROBOT is already holding, so handing it
+// over costs one detour home and buys the whole window back for sweeping, while the HP converts the
+// load in parallel at its own slower rate (§6.1).
+//
+// Only for a load that cannot score, and only while the queue is short — a full ROBOT with a live HUB
+// should be shooting, and the HP cannot clear a backlog. Shared by the AI and the greedy baseline so
+// the OUTPOST never becomes a second, hidden difference between the two sides of a comparison.
+export function worthDelivering(obs, side, rb) {
+  if ((rb.feedMode || 'auto') === 'off') return false;
+  if (obs.hub[side]) return false;
+  if (rb.carrying < rb.capacity) return false;
+  return obs.pools[side].corral < OUTPOST_QUEUE_MAX;
 }
 
 // ---------------------------------------------------------------------------------------------

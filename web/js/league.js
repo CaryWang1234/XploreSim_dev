@@ -7,7 +7,7 @@ import { GEO, INTENT, simulateMatch } from './engine.js';
 import { defaultScenario, makeAlliance, SAMPLES, periodAt } from './model.js';
 import { hubActiveTable } from './rules.js';
 import { makeContext, evaluateMatch, emptyPlan, withClimb, withRoles, ROLE } from './fastsim.js';
-import { DEFAULT_WEIGHTS, WEIGHT_KEYS, cloneWeights, clampWeights } from './ai.js';
+import { DEFAULT_WEIGHTS, WEIGHT_KEYS, cloneWeights, clampWeights, humanChoice, worthDelivering } from './ai.js';
 import { createAI } from './policy.js';
 
 export function makeRng(seed) {
@@ -31,6 +31,11 @@ const inZone = (rb, side) => {
 // beating them means the AI found something a competent team would not have written by hand.
 // ---------------------------------------------------------------------------------------------
 
+// Every baseline runs the same HUMAN PLAYER rule as the AI at its default weights. The baselines are
+// the yardstick for the ROBOT policy, so letting them also differ at the OUTPOST would make an
+// AI-vs-baseline number mean two things at once.
+const humanBaseline = (obs, side) => humanChoice(obs, side);
+
 // 1. random: uniform intent each decision. A floor, not a strategy.
 function randomPolicy(side, seed) {
   const rnd = makeRng(seed);
@@ -53,6 +58,7 @@ function randomPolicy(side, seed) {
       if (r < 0.94) return { mode: INTENT.DEFEND, targetRobot: obs.robots.find((o) => o.alliance !== side)?.idx || 0 };
       return { mode: INTENT.CLIMB, level: 1 };
     },
+    human: humanBaseline,
   };
 }
 
@@ -76,6 +82,7 @@ function shootAlwaysPolicy(side) {
       }
       return best ? { mode: INTENT.COLLECT, target: best } : { mode: INTENT.IDLE };
     },
+    human: humanBaseline,
   };
 }
 
@@ -101,7 +108,11 @@ export function greedyPolicy(side) {
       }
       const active = obs.hub[side];
       if (active && rb.carrying > 0 && (inZone(rb, side) || rb.carrying >= rb.capacity)) return { mode: INTENT.SCORE };
-      if (!active && rb.carrying >= rb.capacity) return { mode: INTENT.STOCKPILE, target: g.shoot };
+      // Nothing to score this window and nothing left to bank: hand the load to the HUMAN PLAYER at
+      // the OUTPOST instead of sitting on it. Same rule as the AI's, so a head-to-head isolates the
+      // ROBOT policy rather than which side happens to use its OUTPOST.
+      if (worthDelivering(obs, side, rb)) return { mode: INTENT.FEED };
+      if (!active && rb.carrying >= rb.capacity) return { mode: INTENT.STOCKPILE, target: g.shootStations[rb.slot] };
       let best = null;
       let bestD = Infinity;
       for (let i = 0; i < obs.fuel.total; i += 2) {
@@ -113,8 +124,9 @@ export function greedyPolicy(side) {
           best = { x: obs.fuel.x[i], y: obs.fuel.y[i] };
         }
       }
-      return best ? { mode: INTENT.COLLECT, target: best } : { mode: INTENT.STOCKPILE, target: g.shoot };
+      return best ? { mode: INTENT.COLLECT, target: best } : { mode: INTENT.STOCKPILE, target: g.shootStations[rb.slot] };
     },
+    human: humanBaseline,
   };
 }
 
@@ -133,7 +145,10 @@ export function buildAlliances(profilesRed, profilesBlue) {
   return { red: makeAlliance(profilesRed, 'red'), blue: makeAlliance(profilesBlue, 'blue') };
 }
 
-export function runOneOpponentMatch({ kind, weights, seed, record = false, scenarioOverride = {}, aiSide = 'red', iterations = 200 }) {
+// `aiOptions` reaches createAI verbatim and is how an ablation is expressed: planOverride pins the
+// macro plan (so the search is skipped), debug collects the decision log. It is spread FIRST so it
+// can never quietly change which ROBOTs are on the field or which side the AI plays.
+export function runOneOpponentMatch({ kind, weights, seed, record = false, scenarioOverride = {}, aiSide = 'red', iterations = 200, aiOptions = {} }) {
   const sc = { ...defaultScenario(), ...scenarioOverride, seed };
   const profiles = [SAMPLES[0], SAMPLES[1], SAMPLES[2]];
   const profB = [SAMPLES[3], SAMPLES[4], SAMPLES[5]];
@@ -142,6 +157,7 @@ export function runOneOpponentMatch({ kind, weights, seed, record = false, scena
   const blueProfiles = aiSide === 'red' ? profB : profiles;
   const alliances = buildAlliances(redProfiles, blueProfiles);
   const ai = createAI({
+    ...aiOptions,
     side: aiSide,
     weights: cloneWeights(weights),
     caps: alliances[aiSide].robots.map(capOf),
@@ -188,7 +204,7 @@ export function sideScore(res, side) {
 }
 
 // Play the AI against one baseline over many seeds, alternating ALLIANCE colour.
-export function evaluateVsBaseline({ kind, weights, matches = 30, seed = 1000, iterations = 200, scenarioOverride = {} }) {
+export function evaluateVsBaseline({ kind, weights, matches = 30, seed = 1000, iterations = 200, scenarioOverride = {}, aiOptions = {}, seat = null }) {
   let wins = 0;
   let losses = 0;
   let ties = 0;
@@ -198,8 +214,11 @@ export function evaluateVsBaseline({ kind, weights, matches = 30, seed = 1000, i
   let traversal = 0;
   let energized = 0;
   for (let i = 0; i < matches; i++) {
-    const aiSide = i % 2 === 0 ? 'red' : 'blue';
-    const { res } = runOneOpponentMatch({ kind, weights, seed: seed + i * 977, aiSide, iterations, scenarioOverride });
+    // Alternating seats is the default because the two are not equivalent: the HUB windows and the
+    // AUTO tie-break are not mirror images, so a fixed seat measures that asymmetry instead of the
+    // policy. `seat` pins it, which is what the Tactics tab's red/blue selector exposes to a user.
+    const aiSide = seat === 'red' || seat === 'blue' ? seat : i % 2 === 0 ? 'red' : 'blue';
+    const { res } = runOneOpponentMatch({ kind, weights, seed: seed + i * 977, aiSide, iterations, scenarioOverride, aiOptions });
     const me = sideScore(res, aiSide);
     const them = sideScore(res, aiSide === 'red' ? 'blue' : 'red');
     aiTotal += me.total;
@@ -273,12 +292,19 @@ export function headToHead({ kindA, kindB, A = DEFAULT_WEIGHTS, B = DEFAULT_WEIG
 }
 
 // ---------------------------------------------------------------------------------------------
-// Evolution strategy over the policy weights. (mu/rho + lambda) with adaptive step size: cheap,
-// derivative-free and reliable for ~35 dimensions, and it runs happily in a Web Worker.
+// Evolution strategy over the policy weights. (mu + lambda) with adaptive step size: cheap,
+// derivative-free and reliable for ~20 dimensions, and it runs happily in a Web Worker.
 //
 // The fitness is deliberately smooth rather than the literal Ranking Point total: RP is a step
 // function (Table 6-5 thresholds), so a population sitting just under SUPERCHARGED would see a
 // flat gradient. Rewarding fractional progress toward each threshold keeps the search climbing.
+//
+// SELECTION IS PAIRED. The incumbent is re-scored inside every generation, on that generation's
+// seeds and against that generation's opponent, and competes with the mutants. The version before
+// this carried `bestFit` across generations while scoring the mutants on `seed + g * 31`, so
+// "improved" was decided by comparing two fitness values measured on different MATCHes — the search
+// could accept a worse vector and did: with 8 MATCHes per evaluation the seed-to-seed spread of the
+// same weights is larger than the improvement it was looking for.
 // ---------------------------------------------------------------------------------------------
 export function smoothUtility(res, aiSide) {
   const me = res.final[aiSide];
@@ -296,12 +322,21 @@ export function smoothUtility(res, aiSide) {
   );
 }
 
-export function fitness({ weights, opponent = null, matches = 6, seed = 4242, iterations = 140, scenarioOverride = {} }) {
+// Set `families` above 1 to spread the MATCHes over that many disjoint seed families instead of
+// spending them all on one. A single family is a FIXED set of FUEL layouts, and a weight vector can
+// exploit the particular ones it holds: a 10-generation run on one family raised its own fitness by
+// +0.9 (four times the seed-to-seed spread of the same weights) and then lost 40 MATCH points a
+// match on seeds it had never seen. Averaging over families is what makes this score track the part
+// that transfers, at the same total MATCH cost.
+const FAMILY_STRIDE = 1000003;
+
+export function fitness({ weights, opponent = null, matches = 6, seed = 4242, iterations = 140, scenarioOverride = {}, families = 1 }) {
+  const fams = Math.max(1, Math.min(families, matches));
   let total = 0;
   for (let i = 0; i < matches; i++) {
     const aiSide = i % 2 === 0 ? 'red' : 'blue';
     const useSelf = opponent && i % 2 === 1;
-    const sc = { ...defaultScenario(), ...scenarioOverride, seed: seed + i * 613 };
+    const sc = { ...defaultScenario(), ...scenarioOverride, seed: (seed + (i % fams) * FAMILY_STRIDE + Math.floor(i / fams) * 613) >>> 0 };
     const profiles = [SAMPLES[0], SAMPLES[1], SAMPLES[2]];
     const profB = [SAMPLES[3], SAMPLES[4], SAMPLES[5]];
     const redProfiles = aiSide === 'red' ? profiles : profB;
@@ -354,46 +389,69 @@ export function evolve({
   budgetMs = 20000,
   scenarioOverride = {},
   selfPlay = true,
+  // Which weights to mutate. The full vector is ~20 dimensions, and a budget large enough to resolve
+  // a change in all of them at once is far larger than one large enough to resolve it in six, so a
+  // short run should name the axes it is allowed to move instead of spreading its samples thin.
+  keys = WEIGHT_KEYS,
+  // How many disjoint seed families each evaluation spends its MATCHes on (see fitness).
+  families = 1,
 }) {
   const rnd = makeRng(seed);
   const start = Date.now();
   let sigma = 0.25;
   let best = cloneWeights(initial);
-  let bestFit = fitness({ weights: best, matches, seed, iterations, scenarioOverride, opponent: selfPlay ? cloneWeights(initial) : null });
+  const movable = keys.length ? keys : WEIGHT_KEYS;
+  const seedsFor = (g) => seed + g * 31;
+  let bestFit = fitness({ weights: best, matches, seed: seedsFor(0), iterations, scenarioOverride, opponent: selfPlay ? cloneWeights(initial) : null, families });
   const history = [{ gen: 0, fit: bestFit, sigma }];
   for (let g = 1; g <= generations; g++) {
     if (Date.now() - start > budgetMs) break;
-    const trials = [];
+    // One seed set and one opponent for the whole generation, incumbent included, so every value
+    // compared below is measured on the same MATCHes.
+    const genSeed = seedsFor(g);
+    const opponent = selfPlay ? best : null;
+    const trials = [best];
     for (let k = 0; k < lambda; k++) {
       const cand = { ...best };
       const nMut = 1 + Math.floor(rnd() * 4);
       for (let m = 0; m < nMut; m++) {
-        const key = WEIGHT_KEYS[Math.floor(rnd() * WEIGHT_KEYS.length)];
+        const key = movable[Math.floor(rnd() * movable.length)];
         const scale = Math.max(0.05, Math.abs(best[key]) || 1);
         cand[key] = best[key] + (rnd() < 0.5 ? -1 : 1) * sigma * scale * (0.4 + rnd());
       }
       trials.push(clampWeights(cand));
     }
-    let improved = false;
+    let genBest = best;
+    let genBestFit = -Infinity;
+    const fits = [];
     for (const cand of trials) {
-      const f = fitness({
-        weights: cand,
-        matches,
-        seed: seed + g * 31,
-        iterations,
-        scenarioOverride,
-        opponent: selfPlay ? best : null,
-      });
-      if (f > bestFit) {
-        bestFit = f;
-        best = cand;
-        improved = true;
+      const f = fitness({ weights: cand, matches, seed: genSeed, iterations, scenarioOverride, opponent, families });
+      fits.push(f);
+      if (f > genBestFit) {
+        genBestFit = f;
+        genBest = cand;
       }
+    }
+    // The candidates in one generation differ from each other mostly by luck, since they were scored
+    // on the same MATCHes and differ by a few weights. Their spread is therefore a FREE estimate of
+    // the selection noise at this sample size, and it is what says whether `fit` moved at all.
+    const fMean = fits.reduce((a, b) => a + b, 0) / fits.length;
+    const spread = Math.sqrt(fits.reduce((a, b) => a + (b - fMean) ** 2, 0) / fits.length);
+    // `fits[0]` is the incumbent scored on THIS generation's MATCHes, which is the only value the
+    // mutants may be compared against — carrying last generation's score forward would compare two
+    // measurements made on different seeds and call the difference an improvement.
+    const incumbentFit = fits[0];
+    const improved = genBestFit > incumbentFit;
+    if (improved) {
+      best = genBest;
+      bestFit = genBestFit;
+    } else {
+      bestFit = incumbentFit;
     }
     sigma = improved ? sigma * 1.08 : sigma * 0.82;
     sigma = Math.max(0.03, Math.min(0.6, sigma));
-    history.push({ gen: g, fit: bestFit, sigma });
-    if (onProgress) onProgress({ gen: g, generations, fit: bestFit, sigma, best: { ...best } });
+    history.push({ gen: g, fit: bestFit, sigma, spread });
+    if (onProgress) onProgress({ gen: g, generations, fit: bestFit, sigma, spread, best: { ...best } });
   }
   return { weights: best, fitness: bestFit, history };
 }

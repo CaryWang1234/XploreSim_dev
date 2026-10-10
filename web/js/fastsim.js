@@ -62,6 +62,11 @@ export function emptyPlan() {
 const D_NEAR = 150;
 const D_FAR = 265;
 
+// §6.5.2: an AUTO climb does not block a TELEOP climb, which only means anything if the ROBOT gets
+// back down. L1 is a ~27 in rung so the drop is quick but not free, and it lands in TRANSITION
+// SHIFT — 10 s with both HUBs active. The engine charges the same time, so the model has to.
+const AUTO_DISMOUNT_SEC = 1.5;
+
 function cycleOf(cap, dist, w) {
   // A ROBOT leaves the collection area when it is full. Capping the payload by a collection-time
   // budget made an 85-FUEL hopper indistinguishable from a 50-FUEL one, which is exactly the
@@ -107,7 +112,9 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
   // ---- AUTO (both HUBs active, Table 6-3) ----
   const autoSec = TIME.autoSec;
   const climbersAuto = ownPlan.auto.climbCount;
-  for (let i = 0; i < 3; i++) {
+  // Every loop below runs over `caps`, not over a fixed three: an ALLIANCE can field one or two
+  // ROBOTs (see the bench switch in the model), and the plan is a 3-slot template either way.
+  for (let i = 0; i < caps.length; i++) {
     if (i < climbersAuto) {
       const risk = 1 - Math.min(1, caps[i].climb.timeSec + caps[i].climb.attachTimeSec) / autoSec;
       if (caps[i].climb.max >= 1 && risk > 0) tower += POINTS.tower.l1Auto;
@@ -128,6 +135,9 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
     const hubActive = row[side];
     const roles = ownPlan.periods[row.period];
     const oppRoles = oppPlan.periods[row.period];
+    // A ROBOT that climbed in AUTO spends the opening of TRANSITION getting back onto the carpet,
+    // so its scoring time in that period is short by the dismount.
+    const secFor = (i) => (row.period === 'TRANSITION' && i < climbersAuto ? Math.max(0, sec - AUTO_DISMOUNT_SEC) : sec);
 
     // Score potential per ROBOT for this period.
     const rates = caps.map((cap, i) => {
@@ -137,24 +147,34 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
       return cycleOf(cap, dist, w).rate;
     });
 
-    // Opponent defenders deny our best ROBOTs first, and the suppression now has to REACH the
-    // estimate. This block used to scale `rates` and then throw the array away — the scoring loop
-    // below recomputed each ROBOT's output from cycleOf — so defenceEfficacy was dead code, DEFEND
-    // cost the search nothing, and it parked two ROBOTs on defence in every window it sat out.
-    const rateScale = [1, 1, 1];
-    const defenders = oppRoles.filter((r) => r === ROLE.DEFEND).length;
-    for (let k = 0; k < defenders; k++) {
+    // Opponent defenders deny our best ROBOTs, and the suppression now has to REACH the estimate.
+    // This block used to scale `rates` and then throw the array away — the scoring loop below
+    // recomputed each ROBOT's output from cycleOf — so defenceEfficacy was dead code, DEFEND cost the
+    // search nothing, and it parked two ROBOTs on defence in every window it sat out.
+    //
+    // ONE defender's worth, not one factor per defender: the engine keeps
+    // `tgt.defensePressure = max(pressure over attackers)`, so a second ROBOT shadowing the same
+    // opponent adds nothing. Multiplying a factor per defender made a two-defender plan look twice as
+    // strong as it is, which is what the search then bought — the strongest available defender sets
+    // the pressure and the rest are wasted bodies.
+    const rateScale = caps.map(() => 1);
+    const defenderSlots = [];
+    for (let i = 0; i < Math.min(oppRoles ? oppRoles.length : 0, oppCaps.length); i++) {
+      if (oppRoles[i] === ROLE.DEFEND) defenderSlots.push(i);
+    }
+    if (defenderSlots.length) {
+      const skill = Math.max(...defenderSlots.map((i) => (oppCaps[i] && oppCaps[i].defenseSkill) || 0.5));
+      const factor = 1 / (1 + w.defenseEfficacy * skill);
       let bestIdx = -1;
       let bestRate = 0;
-      for (let i = 0; i < 3; i++) if (rates[i] > bestRate) { bestRate = rates[i]; bestIdx = i; }
-      if (bestIdx < 0) break;
-      const skill = oppCaps[bestIdx] ? oppCaps[0].defenseSkill : 0.5;
-      const factor = 1 / (1 + w.defenseEfficacy * skill);
-      rates[bestIdx] *= factor;
-      rateScale[bestIdx] *= factor;
+      for (let i = 0; i < rates.length; i++) if (rates[i] > bestRate) { bestRate = rates[i]; bestIdx = i; }
+      if (bestIdx >= 0) {
+        rates[bestIdx] *= factor;
+        rateScale[bestIdx] *= factor;
+      }
     }
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < caps.length; i++) {
       if (roles[i] !== ROLE.SCORE) continue;
       if (row.period === 'END GAME' && i < ownPlan.climb.count) {
         // A climbing ROBOT stops scoring at climbStart; only pre-climb time counts.
@@ -176,7 +196,7 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
         continue;
       }
       const c = cycleOf(caps[i], near > 0 ? D_NEAR : D_FAR, w);
-      const cycles = sec / c.cycle;
+      const cycles = secFor(i) / c.cycle;
       const made = cycles * c.payload * caps[i].accuracy * rateScale[i];
       fuel += made;
       consume(made);
@@ -199,7 +219,7 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
     const prev = ctx.schedule[k];
     const next = ctx.schedule[k + 1];
     if (prev.period === 'AUTO' || prev[side] || !next[side]) continue;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < caps.length; i++) {
       const collecting = ownPlan.periods[prev.period][i] === ROLE.SCORE;
       const readyToDump = ownPlan.periods[next.period][i] === ROLE.SCORE;
       if (collecting && readyToDump) banked += caps[i].capacity * caps[i].accuracy * w.bankCredit;
@@ -254,6 +274,14 @@ export function evaluateMatch(ctx, ownSide, ownPlan, oppPlan, opts = {}) {
 
 // Candidate role assignments for a period. Symmetric permutations of identical ROBOTs collapse,
 // which keeps the branching factor near 18 instead of 27.
+//
+// It is tempting to also let the search choose WHICH ROBOT takes the DEFEND slot, since the
+// reference ALLIANCE has defence skills from 0.5 to 0.86 and the collapse always puts a lone
+// defender on the highest slot. That was implemented, measured and reverted: over 96 MATCHES
+// against greedy on four seed families it moved the win rate from 46% to 38% and the average score
+// from 657 to 647, because the extra candidates are extra ways to buy DEFEND, and the search's
+// appetite for DEFEND is the expensive part (see the defence note in estimateAlliance). The
+// narrower list was the better accidental brake.
 export function roleCandidates(n = 3) {
   const out = [];
   const seen = new Set();
@@ -270,7 +298,7 @@ export function roleCandidates(n = 3) {
     }
     // Climbing is a MATCH-level ladder (plan.climb), not a per-period role: the engine policy never
     // reads a CLIMB role, so generating one only halved the useful search space and printed a
-    // "攀爬" cell in a SHIFT where nothing can climb.
+    // "climb" cell in a SHIFT where nothing can climb.
     for (const r of [ROLE.SCORE, ROLE.DEFEND]) rec([...arr, r]);
   };
   rec([]);

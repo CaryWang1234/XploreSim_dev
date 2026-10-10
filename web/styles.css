@@ -73,30 +73,48 @@ td.mono, th.mono, .robot-title, .period-strip, .margin, .legend {
 .chip.ok { color: var(--good); border-color: #1d4d38; }
 .chip.err { color: var(--bad); border-color: #56262a; }
 
+/* Three columns, one per job: configure on the left, watch in the middle, read on the right. Each panel
+   scrolls inside itself so the FIELD stays on screen while you edit a card — the old full-width setup
+   row pushed the replay below the fold on a laptop. */
 main {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(360px, 460px);
   gap: 14px;
   padding: 14px 18px 40px;
   align-items: start;
 }
-.panel.setup { grid-column: 1 / -1; }
 .panel {
   background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 14px 16px 16px;
   box-shadow: var(--shadow);
+  min-width: 0;
+}
+/* A rail you can read without the page moving: the setup column has its own scrollbar and the field
+   column starts below the header, so both stay put while the inspector scrolls. */
+.panel.setup,
+.panel.output {
+  position: sticky;
+  top: 66px;
+  max-height: calc(100vh - 82px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .hint { color: var(--dim); font-size: 12px; }
 
 /* ---- setup ---- */
-.setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* One alliance above the other: the rail is ~340 px wide and two alliance columns of four-up spec
+   fields is unreadable. The alliance heading carries a colour bar so the two blocks still scan apart. */
+.setup-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .alliance-block { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
 .alliance-block.red { border-left: 3px solid var(--red); }
 .alliance-block.blue { border-left: 3px solid var(--blue); }
 .alliance-block h3 { margin: 0 0 8px; color: var(--text); font-size: 12px; letter-spacing: 0.1em; }
+.hp-row { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 11px; color: var(--dim); letter-spacing: 0.06em; }
+.hp-row input { width: 52px; flex: none; }
+.hp-row input + input { margin-left: 4px; }
 .roster { display: grid; gap: 8px; }
 .robot-card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #0f161f; }
 .robot-title { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim); font-family: var(--mono); margin-bottom: 6px; }
@@ -109,8 +127,35 @@ main {
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.red { background: var(--red); }
 .dot.blue { background: var(--blue); }
-.robot-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; align-items: end; }
+.robot-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; align-items: end; }
+/* The replay's transports sit on one line, and the scrub grows to take the slack. */
+.transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scrub-wrap { position: relative; flex: 1 1 200px; min-width: 140px; }
+.scrub-wrap input[type='range'] { width: 100%; }
+/* A ruler under the scrub: one tick per foul, climb or fault, click to jump. It is a separate strip
+   rather than an overlay on the track because a range input's thumb is inset by half its width, so
+   ticks drawn over the track would not line up with the position they claim. */
+.scrub-marks { position: relative; height: 9px; margin-top: -3px; }
+.scrub-marks i { position: absolute; top: 0; width: 3px; height: 9px; border-radius: 1px; cursor: pointer; }
+.scrub-marks i:hover { height: 12px; }
+.scrub-marks i.foul { background: #e0413f; }
+.scrub-marks i.climb { background: #7ad0a6; }
+.scrub-marks i.fault { background: #ffb84a; }
 .robot-row label { display: grid; gap: 2px; font-size: 11px; color: var(--dim); }
+/* Which numbers below come from a batch of MATCHES and which from the single replay being shown: the
+   two scopes used to be mixed under one tab with no label on either. */
+.scope {
+  margin: 14px 0 6px; padding: 5px 9px; border-left: 3px solid var(--line); background: #131c26;
+  color: var(--dim); font-size: 11px; line-height: 1.5;
+}
+.scope b { color: var(--text); }
+.delta { margin: 10px 0 4px; font-size: 11px; color: var(--dim); line-height: 1.7; }
+.delta b { color: var(--text); }
+.delta .up { color: var(--good); }
+.delta .down { color: var(--warn); }
+.robot-row label.check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); }
+.robot-card.bench { opacity: 0.55; }
+.robot-card.bench .robot-title em { color: var(--dim); }
 input, select {
   background: #0e151d; color: var(--text); border: 1px solid var(--line);
   border-radius: 7px; padding: 5px 7px; font-size: 12px; font-family: var(--mono); width: 100%;
@@ -124,7 +169,13 @@ select { font-family: inherit; }
 .adv-grid label.check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
 .advanced { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .advanced summary { cursor: pointer; color: var(--dim); font-size: 12px; }
-.run-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+/* The action bar is docked to the bottom of the setup rail: the roster is taller than the column, and
+   the buttons should not be the thing you have to scroll to reach. */
+.run-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px;
+  position: sticky; bottom: -16px; padding: 10px 0 4px;
+  background: linear-gradient(180deg, rgba(19, 27, 38, 0) 0%, var(--panel) 22%);
+}
 .btn {
   background: #1d2836; color: var(--text); border: 1px solid var(--line);
   border-radius: 9px; padding: 8px 14px; cursor: pointer;
@@ -150,7 +201,7 @@ select { font-family: inherit; }
 .score.red .tag { color: var(--red); }
 .score.blue .tag { color: var(--blue); }
 .score strong { font-family: var(--mono); font-size: 30px; line-height: 1; }
-.score .detail { font-size: 11px; color: var(--dim); font-family: var(--mono); }
+.score .detail { font-size: 11px; color: var(--dim); font-family: var(--mono); line-height: 1.45; }
 .clock { text-align: center; font-family: var(--mono); }
 .clock .period { font-size: 11px; letter-spacing: 0.18em; color: var(--accent); }
 .clock .timer { font-size: 22px; }
@@ -160,10 +211,16 @@ select { font-family: inherit; }
 }
 .clock .margin.red { color: #ffd9d8; border-color: rgba(224, 65, 63, 0.55); background: rgba(224, 65, 63, 0.16); }
 .clock .margin.blue { color: #d6e6ff; border-color: rgba(47, 125, 225, 0.55); background: rgba(47, 125, 225, 0.16); }
-.hub-strip { display: flex; gap: 4px; justify-content: center; margin-top: 4px; }
-.hub-strip i { width: 22px; height: 6px; border-radius: 3px; background: #2b3547; display: block; }
-.hub-strip i.on-r { background: var(--red); }
-.hub-strip i.on-b { background: var(--blue); }
+.hub-strip { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px; font-size: 11.5px; }
+/* The lit arrow is the Active-HUB tell, the way the audience display shows it: it points at the
+   ALLIANCE whose HUB will accept FUEL right now, and both arrows light in AUTO / TRANSITION / END GAME. */
+.hub-strip .ar { font-style: normal; font-size: 13px; line-height: 1; color: #2b3547; }
+.hub-strip .ar.on { color: var(--accent); text-shadow: 0 0 8px rgba(255, 217, 74, 0.6); }
+.hub-strip span { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+.hub-strip.red span { color: #ffd9d8; border-color: rgba(224, 65, 63, 0.55); background: rgba(224, 65, 63, 0.16); }
+.hub-strip.blue span { color: #d6e6ff; border-color: rgba(47, 125, 225, 0.55); background: rgba(47, 125, 225, 0.16); }
+.hub-strip.both span { color: #fff0c2; border-color: rgba(255, 217, 74, 0.5); background: rgba(255, 217, 74, 0.12); }
+.score .teams { font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; color: #c8d5ea; }
 canvas#field { width: 100%; display: block; border-radius: 10px; border: 1px solid var(--line); background: #0f1620; }
 .transport { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .transport input[type="range"] { flex: 1; }
@@ -183,21 +240,105 @@ canvas#field { width: 100%; display: block; border-radius: 10px; border: 1px sol
 }
 .auto-note:empty { display: none; }
 .auto-note b { color: var(--text); }
-.legend { color: var(--dim); font-size: 11px; margin-top: 8px; display: flex; gap: 14px; flex-wrap: wrap; }
+.legend { color: var(--dim); font-size: 11px; margin-top: 8px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+/* The roster chips are the focus control, so they sit at the end of the legend as buttons. */
+.legend .roster-side { font-family: var(--mono); color: var(--dim); margin-left: 6px; }
+.legend .roster-chip {
+  font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 999px; cursor: pointer;
+  background: #101823; border: 1px solid var(--line); color: #cfdaf0;
+}
+.legend .roster-chip:hover { border-color: #3d4d63; }
+.legend .roster-chip.on { background: rgba(255, 217, 74, 0.16); border-color: rgba(255, 217, 74, 0.6); color: #fff0c2; }
+.speed input[type="checkbox"] { width: auto; }
+/* The keyboard strip under the heading is a reference, not prose, so it is drawn as keys. */
+.kbd {
+  font-family: var(--mono); font-size: 10.5px; padding: 1px 5px; border-radius: 5px;
+  border: 1px solid var(--line); border-bottom-width: 2px; background: #0f161f; color: #cfdaf0;
+}
+.howto { margin-top: 8px; }
+.howto summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+.howto[open] summary { color: var(--text); }
+.howto p { margin-top: 6px; line-height: 1.55; }
+
+/* ---- immersive playback -------------------------------------------------------------------
+   Two flavours. `body.cinema` (the Fill button, key C) lifts the FIELD panel over the page and hides
+   everything else, leaving the browser chrome alone. `:fullscreen` (the Fullscreen button, key F) hands the
+   panel to the browser, which removes the chrome. Both just need the panel to report an honest
+   content box, because ui.js measures the leftover height there and letterboxes the canvas into it. */
+body.cinema { overflow: hidden; }
+body.cinema .field-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  border-radius: 0;
+  padding: 12px 16px 14px;
+  overflow: hidden;
+}
+.field-panel:fullscreen {
+  padding: 12px 16px 14px;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+}
+body.cinema .field-panel .panel-head,
+.field-panel:fullscreen .panel-head { margin-bottom: 6px; }
+/* The legend is a reading aid for the page, not part of the picture: in Fill or Fullscreen it is a
+   wall of text under the FIELD that steals height the replay wants. Drop it and let ui.js letterbox
+   the canvas into what is left. Same for the explanation under the heading - it is the longest
+   paragraph in the panel and it is the first thing a viewer has already read. */
+body.cinema .field-panel .legend,
+.field-panel:fullscreen .legend,
+body.cinema .field-panel #field-sub,
+.field-panel:fullscreen #field-sub { display: none; }
+body.cinema #field,
+.field-panel:fullscreen #field { border-radius: 8px; }
 
 /* ---- output ---- */
-.output { position: sticky; top: 74px; }
-.tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
-.tab { background: transparent; border: 1px solid transparent; color: var(--dim); border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 12px; }
+/* Six tabs in a narrow rail would wrap into three rows, so they are a segmented control that scrolls
+   sideways instead, with the active one carried by an underline rather than a filled box (a filled box
+   on a dark panel reads as a button, not as "you are here"). */
+.tabs {
+  display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding-bottom: 0;
+  overflow-x: auto; scrollbar-width: none; margin-bottom: 4px;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--dim);
+  padding: 6px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; margin-bottom: -1px;
+}
 .tab:hover { color: var(--text); }
-.tab.active { color: var(--text); background: #1d2836; border-color: var(--line); }
-.tab-body { padding-top: 10px; max-height: calc(100vh - 200px); overflow-y: auto; }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-body { padding-top: 10px; max-height: calc(100vh - 230px); overflow-y: auto; }
+.tab-body h3 { margin: 16px 0 6px; font-size: 13px; }
+
+/* The rule-source prose used to be a wall of paragraphs the tab could not be scanned through. Each
+   block is a collapsed <details> now: the summary is the claim, opening it shows the measurement. */
+.notes { display: grid; gap: 6px; margin-top: 8px; }
+.note { border: 1px solid var(--line); border-radius: 10px; background: #0f161f; }
+.note > summary {
+  cursor: pointer; list-style: none; padding: 8px 11px; font-size: 12px; color: var(--text);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.note > summary::-webkit-details-marker { display: none; }
+.note > summary::before { content: '▸'; color: var(--dim); font-size: 10px; flex: none; }
+.note[open] > summary::before { content: '▾'; }
+.note > summary:hover { background: rgba(255, 255, 255, 0.035); border-radius: 10px; }
+.note > summary b { font-weight: 600; }
+.note > summary i { font-style: normal; color: var(--dim); font-size: 11px; }
+.note .body { padding: 0 11px 10px 27px; display: grid; gap: 7px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.note .body p { margin: 0; font-size: 12px; color: var(--dim); line-height: 1.55; }
+.note .body p strong { color: var(--text); font-weight: 600; }
+.note .body table { font-size: 11.5px; }
+
+.pick-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.pick-row label { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--dim); }
+.pick-note { font-size: 11.5px; color: var(--good); }
 
 /* Before the first run the insight sections would render as bare headings over empty canvases;
-   show one message instead and hide the skeleton. */
-#tab-insight.is-empty > *:not(.empty) { display: none; }
+   show one message instead and hide the skeleton. The seat and opponent selectors stay visible: they
+   decide what the NEXT run means, so hiding them until a run exists is backwards. */
+#tab-insight.is-empty > *:not(.empty):not(.pick-row) { display: none; }
 .empty {
   display: grid; gap: 6px; padding: 22px 18px; text-align: center;
   border: 1px dashed var(--line); border-radius: 12px; color: var(--dim); font-size: 12.5px;
@@ -234,6 +375,36 @@ td.mono, th.mono { font-family: var(--mono); }
 .insights .tone-warn b { color: var(--warn); }
 .insights .tone-bad b { color: var(--bad); }
 .events { margin: 0; padding-left: 18px; font-size: 12px; font-family: var(--mono); color: var(--dim); max-height: 220px; overflow-y: auto; }
+
+/* ---- fouls, traced to a ROBOT ---------------------------------------------------------------
+   A foul is worth 5 or 15 points, which is a whole cycle of travel, so it has to be visible where the
+   score is and not only in a table on the far side of the page. The chips sit under the scoreboard and
+   each one jumps the replay to the second it happened. */
+.foul-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.foul-strip:empty { display: none; }
+.foul-chip {
+  font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  background: #16202c; border: 1px solid var(--line); color: var(--dim);
+}
+.foul-chip b { color: var(--text); }
+.foul-chip.red { border-color: rgba(224, 65, 63, 0.55); color: #ffd9d8; background: rgba(224, 65, 63, 0.14); }
+.foul-chip.blue { border-color: rgba(47, 125, 225, 0.55); color: #d6e6ff; background: rgba(47, 125, 225, 0.14); }
+.foul-chip:hover { filter: brightness(1.18); }
+#foul-note b { color: var(--text); }
+#foul-note:not(:empty) { margin-bottom: 8px; }
+#foul-table tr.jump { cursor: pointer; }
+#foul-table tr.jump:hover td { background: rgba(255, 255, 255, 0.06); }
+/* A foul COUNT in the robot table is a question, so it is a control: click it and the clause table
+   below narrows to that machine. */
+.foul-link {
+  font: inherit; font-family: var(--mono); background: none; border: none; padding: 0; cursor: pointer;
+  border-bottom: 1px dashed var(--warn); color: var(--warn);
+}
+.foul-clear {
+  font-size: 11px; margin-left: 6px; padding: 2px 9px; border-radius: 999px; cursor: pointer;
+  background: #16202c; border: 1px solid var(--line); color: var(--dim); font-family: inherit;
+}
+.foul-clear:hover { color: var(--text); border-color: #3d4d63; }
 .conflicts { display: grid; gap: 8px; }
 .conflict { border: 1px solid #5a4a12; background: rgba(240, 166, 60, 0.08); border-radius: 10px; padding: 9px 11px; font-size: 12px; }
 .conflict b { color: var(--warn); }
@@ -241,12 +412,40 @@ td.mono, th.mono { font-family: var(--mono); }
 .field-label input { width: 90px; }
 footer { padding: 16px 18px 28px; color: var(--dim); font-size: 11.5px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--line); }
 
+/* Two columns from here down: the setup rail joins the field on top and the inspector keeps its own
+   column, because the FIELD and the read-out are the two things you compare. */
+/* ---- refactor polish ----------------------------------------------------------------------
+   Three panels now scroll inside themselves, so the default light-mode scrollbar would be the loudest
+   thing on a dark page. Selection and card rhythm come with it. */
+* { scrollbar-width: thin; scrollbar-color: #2f3d51 transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-thumb { background: #2f3d51; border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: #3d4d63; background-clip: content-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+::selection { background: rgba(255, 217, 74, 0.28); }
+.cards { gap: 7px; }
+.card { position: relative; }
+.card .v { letter-spacing: -0.01em; }
+/* A section heading inside a scrolling column should not float free of what it names. */
+.tab-body h3 { position: sticky; top: 0; z-index: 2; background: linear-gradient(180deg, var(--panel-2) 60%, rgba(24, 34, 47, 0)); padding-top: 4px; }
+.table-wrap { scrollbar-gutter: stable; }
+
+@media (max-width: 1400px) {
+  main { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); }
+  .panel.setup { grid-column: 1 / -1; position: static; max-height: none; overflow: visible; }
+  /* With the rail no longer scrolling, two alliance columns are wide enough again. */
+  .setup-grid { grid-template-columns: 1fr 1fr; }
+  .run-row { position: static; background: none; }
+}
+
 @media (max-width: 1100px) {
-  main { grid-template-columns: 1fr; }
-  .output { position: static; }
+  /* minmax(0, 1fr), not 1fr: a grid track's automatic minimum is its content's min-content width, and
+     the reference tables below use nowrap cells, so a plain 1fr let MAIN push 184 px past the viewport
+     on a phone and gave the whole page a sideways scroll. */
+  main { grid-template-columns: minmax(0, 1fr); }
+  .panel.output { position: static; max-height: none; overflow: visible; }
   .tab-body { max-height: none; }
   .setup-grid { grid-template-columns: 1fr; }
-  .robot-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {

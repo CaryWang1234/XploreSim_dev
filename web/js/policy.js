@@ -6,7 +6,7 @@
 //                    isolation, G420 TOWER protection window).
 
 import { TIME, POINTS, FIELD, hubActiveTable } from './rules.js';
-import { GEO, INTENT } from './engine.js';
+import { GEO, INTENT, segmentPointDistance, SHOT_BLOCK_RADIUS_IN } from './engine.js';
 import {
   ROLE,
   periodSeconds,
@@ -18,11 +18,15 @@ import {
   withAuto,
   estimateAlliance,
 } from './fastsim.js';
-import { DEFAULT_WEIGHTS, MacroPlanner, OpponentModel, scoutCaps } from './ai.js';
+import { DEFAULT_WEIGHTS, MacroPlanner, OpponentModel, scoutCaps, humanChoice, worthDelivering } from './ai.js';
 
 const CELL_X = 48;
 const CELL_Y = 48;
 const OBSERVE_EVERY_SEC = 10;
+// Inside this a partner is close enough that two ROBOTs are working one pile and bumping bumpers
+// doing it. Roughly two car widths: the separation penalty falls off to nothing at the edge, so it
+// spreads the ALLIANCE out without forbidding two ROBOTs from ever being near each other.
+const MATE_SEP_IN = 72;
 
 export function createAI(opts) {
   const {
@@ -56,6 +60,7 @@ export function createAI(opts) {
   // every decision makes it fire one FUEL, drop below the threshold, and drive back out forever.
   const scoreCommit = new Map();
   let claims = {};
+  let defClaims = {};
   let lastDecisionT = -1;
   let lastObserveT = -Infinity;
   const oppHistory = { fuel: 0, tower: 0, lastFuel: 0, lastT: 0 };
@@ -118,30 +123,36 @@ export function createAI(opts) {
   // contacts in the G420 window, and never defend when their HUB cannot score anyway.
   function pickDefenseTarget(rb, obs) {
     const t = obs.t;
-    if (t > TIME.matchSec - TIME.endgameSec) {
-      // G420: no contact with an opponent touching its TOWER in the last 30 s.
-      const cands = obs.robots.filter(
-        (o) =>
-          o.alliance === oppSide &&
-          Math.hypot(o.x - GEO[oppSide].tower.x, o.y - GEO[oppSide].tower.y) > 110,
-      );
-      if (!cands.length) return -1;
-    }
+    const endgame = t > TIME.matchSec - TIME.endgameSec;
     let best = -1;
     let bestV = -Infinity;
+    let fallback = -1;
+    let fallbackV = -Infinity;
     for (const o of obs.robots) {
       if (o.alliance !== oppSide || o.disabled) continue;
+      // G420: no contact with an opponent touching its TOWER in the last 30 s.
+      if (endgame && Math.hypot(o.x - GEO[oppSide].tower.x, o.y - GEO[oppSide].tower.y) <= 110) continue;
       const d = Math.hypot(o.x - rb.x, o.y - rb.y);
       const capIdx = o.slot;
       const scouted = oppCaps[capIdx] || { speed: 120, intake: 2.5 };
       const threat = o.carrying * weights.defendCarryWeight + (scouted.speed * scouted.intake) / 400 * weights.defendThreatWeight;
       const v = threat - d / 900;
+      if (v > fallbackV) {
+        fallbackV = v;
+        fallback = o.idx;
+      }
+      // Nobody gains from two ROBOTs shadowing the same opponent ROBOT: they bump each other off it
+      // and leave a third opponent free. A partner that got there first keeps it; this ROBOT only
+      // doubles up when there is no other opponent to take.
+      if (defClaims[o.idx]) continue;
       if (v > bestV) {
         bestV = v;
         best = o.idx;
       }
     }
-    return best;
+    const chosen = best >= 0 ? best : fallback;
+    if (chosen >= 0) defClaims[chosen] = true;
+    return chosen;
   }
 
   // ---- FUEL cluster targeting. The density grid is recomputed per decision round; cells inside a
@@ -207,6 +218,20 @@ export function createAI(opts) {
     const prev = targets.get(rb.slot);
     const stickyKey = prev && obs.t - prev.t < weights.targetRefreshSec ? prev.key : -1;
 
+    // Partners, and where each of them was last sent. Two ROBOTs converging on one pile do not empty it
+    // any faster and spend the trip shoving each other, so a candidate is priced down by how close it
+    // is to a partner — both the partner's body and the target it is already driving at, because a
+    // partner 200 in from a pile is still going to arrive there before this ROBOT crosses the field.
+    const mates = [];
+    if (weights.mateSeparation > 0) {
+      for (const m of obs.robots) {
+        if (m.alliance !== side || m.disabled || m.idx === rb.idx) continue;
+        mates.push({ x: m.x, y: m.y });
+        const mt = targets.get(m.slot);
+        if (mt && mt.point) mates.push({ x: mt.point.x, y: mt.point.y });
+      }
+    }
+
     let best = null;
     const consider = (x, y, key, n) => {
       const dist = Math.hypot(x - rb.x, y - rb.y);
@@ -214,6 +239,12 @@ export function createAI(opts) {
       v -= penaltyAt(x, y);
       const distToHome = Math.abs(x - GEO[side].hub.x);
       v -= (distToHome / GEO.L) * weights.clusterOwnHalfBias;
+      if (mates.length) {
+        for (const m of mates) {
+          const d = Math.hypot(x - m.x, y - m.y);
+          if (d < MATE_SEP_IN) v -= weights.mateSeparation * (1 - d / MATE_SEP_IN);
+        }
+      }
       if (key >= 0 && key === stickyKey) v += weights.clusterStickiness;
       if (!best || v > best.v) best = { v, x, y, key, n };
     };
@@ -244,7 +275,7 @@ export function createAI(opts) {
     }
     if (!best) return null;
     if (best.key >= 0) claims[best.key] = true;
-    targets.set(rb.slot, { key: best.key, t: obs.t });
+    targets.set(rb.slot, { key: best.key, t: obs.t, point: { x: best.x, y: best.y } });
     return { x: best.x, y: best.y, weight: best.n };
   }
 
@@ -256,6 +287,18 @@ export function createAI(opts) {
     let near = Infinity;
     for (const o of obs.robots) {
       if (o.alliance !== oppSide || o.disabled) continue;
+      const d = Math.hypot(o.x - x, o.y - y);
+      if (d < near) near = d;
+    }
+    return near;
+  }
+
+  // Room to shoot, measured against EVERY other ROBOT rather than only the opponents. Two turrets
+  // ranked by opponent clearance alone pick the same candidate and then shove each other off it.
+  function nearestRobotClearance(x, y, self, obs) {
+    let near = Infinity;
+    for (const o of obs.robots) {
+      if (o.disabled || o.idx === self.idx) continue;
       const d = Math.hypot(o.x - x, o.y - y);
       if (d < near) near = d;
     }
@@ -281,7 +324,7 @@ export function createAI(opts) {
     for (const c of cands) {
       if (c.x < g.allianceZone[0] + 12 || c.x > g.allianceZone[1] - 12) continue;
       if (c.y < 24 || c.y > GEO.W - 24) continue;
-      const near = opponentClearance(c.x, c.y, obs);
+      const near = nearestRobotClearance(c.x, c.y, rb, obs);
       if (near > bestClearance) {
         bestClearance = near;
         best = { x: c.x, y: c.y };
@@ -293,8 +336,126 @@ export function createAI(opts) {
   // Distance below which an opponent is close enough to actually be in the way of a shot.
   const DEFENDED_CLEARANCE = 40;
 
+  // ---- PASS targeting. A collector that has crossed the CENTER LINE faces a long trip home; if a
+  // partner is already back on our side, throwing the load to them converts that trip into the
+  // partner's short one. Passing to somebody standing next to you moves nothing, so the target is
+  // always a partner who is on our own half and has room to take the load. With `allowZone` (the
+  // eager posture) a ROBOT with nobody to throw to aims at its own ALLIANCE ZONE instead: the load
+  // becomes loose FUEL on the half we are about to fight for, which is the play the user asked for.
+  function passTarget(rb, obs, allowZone) {
+    const onFarSide = side === 'red' ? rb.x > GEO.centerLineX : rb.x < GEO.centerLineX;
+    if (!onFarSide) return null;
+    let best = null;
+    let bestScore = -Infinity;
+    for (const m of obs.robots) {
+      if (m.alliance !== side || m.disabled || m.idx === rb.idx) continue;
+      const onOurHalf = side === 'red' ? m.x < GEO.centerLineX : m.x > GEO.centerLineX;
+      if (!onOurHalf) continue;
+      const room = m.capacity - m.carrying;
+      if (room <= 0) continue;
+      // Nearest partner with room wins: a shorter pass lands tighter (the engine spreads the landing
+      // with the length of the pass) and leaves the partner closer to the HUB.
+      const v = room * 0.5 - Math.hypot(m.x - rb.x, m.y - rb.y);
+      if (v > bestScore) {
+        bestScore = v;
+        best = { x: m.x, y: m.y };
+      }
+    }
+    if (best || !allowZone) return best;
+    // Nobody is home to take it, so aim at our own ALLIANCE ZONE: deep enough to be clear of the HUB
+    // mouth (a pass can never be a disguised scoring shot) and clear of the HUB-exit zone, because a
+    // pile that lands inside it invites a G408 foul the moment somebody collects it.
+    const dirHome = side === 'red' ? -1 : 1;
+    return {
+      x: GEO[side].hub.x + dirHome * (FIELD.hub.sizeIn / 2 + GEO.hubExitZoneRadiusIn + 10),
+      y: GEO.yc,
+    };
+  }
+
+  // ---- Active pushing. The engine's passive shove only rearranges FUEL a ROBOT already ran into;
+  // an active pusher goes looking for a pile that is still on THEIR side of the CENTER LINE and herds
+  // it home. The target handed over is the FUEL itself — INTENT.PUSH works out the approach so the
+  // shove travels toward our half (a BUMPER running into a ball from the home side would send it the
+  // wrong way). Only FUEL within reach of the CENTER LINE is worth the trip: past that the round trip
+  // costs more than the herd gains.
+  function pushTarget(rb, obs) {
+    const st = obs.fuel.state;
+    let best = null;
+    let bestScore = Infinity;
+    for (let i = 0; i < obs.fuel.total; i++) {
+      if (st[i] !== 0) continue;
+      const x = obs.fuel.x[i];
+      const y = obs.fuel.y[i];
+      const far = side === 'red' ? x > GEO.centerLineX : x < GEO.centerLineX;
+      if (!far) continue;
+      const fromLine = Math.abs(x - GEO.centerLineX);
+      if (fromLine > 140) continue;
+      const score = Math.hypot(x - rb.x, y - rb.y) + 2 * fromLine;
+      if (score < bestScore) {
+        bestScore = score;
+        best = { x, y };
+      }
+    }
+    return best;
+  }
+
+  // How clear the launch lane is: the closest an opponent ROBOT comes to the segment from the firing
+  // spot to the HUB. Same geometry the engine uses to decide whether a shot is blocked, so the AI
+  // cannot think a lane is clear when the engine will stop the FUEL in it.
+  function laneClearance(x, y, obs) {
+    const hub = GEO[side].hub;
+    let near = Infinity;
+    for (const o of obs.robots) {
+      if (o.alliance !== oppSide || o.disabled) continue;
+      // A ROBOT on the TOWER is above the lane, not in it.
+      if (o.climb.attaching || o.climb.progress > 0 || o.climb.done) continue;
+      const d = segmentPointDistance(x, y, hub.x, hub.y, o.x, o.y);
+      if (d < near) near = d;
+    }
+    return near;
+  }
+
+  // The alignment circle a full-width shooter has to fire from is the engine's, not a guess.
+  const ALIGN_RADIUS_IN = 46;
+  // Above this the lane counts as clear and the ROBOT stays put: a clear lane is the shortest cycle,
+  // and only hunting for an alternative when the shot would actually hit somebody keeps the pick from
+  // flapping between equally good spots. Hysteresis over the engine's block radius, because a shot
+  // that is blocked at release wastes the FUEL and the trip.
+  const BLOCKED_LANE_IN = SHOT_BLOCK_RADIUS_IN + 8;
+
+  function dumperFireSpot(rb, obs) {
+    const g = GEO[side];
+    const lane = g.shootStations[rb.slot];
+    if (laneClearance(lane.x, lane.y, obs) > BLOCKED_LANE_IN) return null;
+    const back = side === 'red' ? -1 : 1; // deeper into our own ALLIANCE ZONE, away from the HUB face
+    let best = null;
+    let bestClear = -Infinity;
+    for (const dx of [0, 18, 36]) {
+      for (const dy of [-30, -15, 0, 15, 30]) {
+        const x = lane.x + back * dx;
+        const y = lane.y + dy;
+        if (x < g.allianceZone[0] + 10 || x > g.allianceZone[1] - 10) continue;
+        if (y < 20 || y > GEO.W - 20) continue;
+        if (Math.hypot(x - g.shoot.x, y - g.shoot.y) >= ALIGN_RADIUS_IN) continue;
+        const clear = laneClearance(x, y, obs);
+        if (clear > bestClear) {
+          bestClear = clear;
+          best = { x, y };
+        }
+      }
+    }
+    return best;
+  }
+
   function scoreIntent(rb, obs) {
-    if (rb.mechanism !== 'turret') return { mode: INTENT.SCORE };
+    if (rb.mechanism !== 'turret') {
+      // Defence can now stop a shot with a body instead of only slowing it down, so a Dumper has to
+      // answer it: when its lane is occupied it slides along the HUB face to a spot with a clear line
+      // rather than feeding a defender. A clear lane returns null, which drives the old behaviour
+      // (the engine's per-DRIVER-STATION lane).
+      const spot = dumperFireSpot(rb, obs);
+      return spot ? { mode: INTENT.SCORE, target: spot } : { mode: INTENT.SCORE };
+    }
     const g = GEO[side];
     const inZone = rb.x >= g.allianceZone[0] && rb.x <= g.allianceZone[1];
     // The whole point of a turret is that it does not need the HUB face. Making it drive to the
@@ -326,6 +487,26 @@ export function createAI(opts) {
       t = Math.max(t, end);
     }
     return acc;
+  }
+
+  // The mirror of secsUntilHubOff: how much longer our own HUB stays dark. Null when the schedule is
+  // not known yet (AUTO decides it) or when the HUB is already live, and callers read null as "there
+  // is no window to prepare for".
+  function secsUntilHubOn(obs) {
+    const sched = obs.schedule;
+    if (!sched || obs.hub[side]) return null;
+    let acc = 0;
+    let t = obs.t;
+    for (const row of sched) {
+      const [start, end] = periodBounds(row.period);
+      if (end <= t) continue;
+      const dur = Math.min(end, TIME.matchSec) - Math.max(start, t);
+      if (dur <= 0) continue;
+      if (row[side]) return acc;
+      acc += dur;
+      t = Math.max(t, end);
+    }
+    return null;
   }
 
   function periodBounds(period) {
@@ -427,6 +608,7 @@ export function createAI(opts) {
       targets.clear();
       scoreCommit.clear();
       claims = {};
+      defClaims = {};
       mctsStats = { rollouts: 0, calls: 0, nodes: 0 };
       lastDecisionT = -1;
       lastObserveT = -Infinity;
@@ -461,6 +643,7 @@ export function createAI(opts) {
       if (lastDecisionT !== t) {
         lastDecisionT = t;
         claims = {};
+        defClaims = {};
       }
       // The posterior is only as good as its sample count, and period starts give it just seven
       // looks per MATCH. Re-observe on a timer so the END GAME TOWER read reflects behaviour
@@ -508,7 +691,9 @@ export function createAI(opts) {
         }
         const c0 = pickCluster(rb, obs);
         why.reason = 'auto-collect';
-        return ret(c0 ? { mode: INTENT.COLLECT, target: c0 } : { mode: INTENT.STOCKPILE, target: g.shoot });
+        // No pile worth chasing: idle on this ROBOT's own shooting lane, not on a spot the whole
+        // ALLIANCE shares (see GEO.shootStations).
+        return ret(c0 ? { mode: INTENT.COLLECT, target: c0 } : { mode: INTENT.STOCKPILE, target: g.shootStations[rb.slot] });
       }
 
       const hubActive = obs.hub[side];
@@ -532,6 +717,34 @@ export function createAI(opts) {
         why.reason = 'dump-committed';
         return ret(scoreIntent(rb, obs));
       }
+
+      // PASS: a collector stuck on the far half hands its load to a partner who is already home,
+      // instead of making the whole trip back with it. Two conditions, because passing is not free —
+      // the landing scatters, so somebody has to pick the FUEL up again: the load has to be worth
+      // handing over, and the target has to be a real shortcut to the HUB rather than a lateral move.
+      // The per-ROBOT posture comes from the setup panel: `auto` is this conservative rule, `eager`
+      // lowers the bar and lets the aim point be our own ALLIANCE ZONE, `off` never throws.
+      const passMode = rb.passMode || 'auto';
+      if (passMode !== 'off') {
+        const need = passMode === 'eager' ? weights.passEagerFrac : weights.passWhenFarFrac;
+        if (frac >= need) {
+          const pt = passTarget(rb, obs, passMode === 'eager');
+          if (pt) {
+            const myToHub = Math.hypot(rb.x - g.hub.x, rb.y - g.hub.y);
+            const theirToHub = Math.hypot(pt.x - g.hub.x, pt.y - g.hub.y);
+            // `eager` is the user overruling the planner's judgement about whether anybody is there to
+            // catch it, so it only insists that the aim point really is nearer home than the ROBOT is.
+            // `auto` keeps the strict economics test: a 150 in saving, which in practice means the play
+            // only fires when it is unambiguous.
+            const margin = passMode === 'eager' ? 60 : 150;
+            if (theirToHub + margin < myToHub) {
+              why.reason = `pass-${passMode}`;
+              return ret({ mode: INTENT.PASS, target: pt });
+            }
+          }
+        }
+      }
+
       if (hubActive && rb.carrying > 0) {
         const left = secsUntilHubOff(obs);
         const start = (reason) => {
@@ -547,33 +760,110 @@ export function createAI(opts) {
       }
 
       // ---- our own HUB is inactive ----
-      // During an ALLIANCE SHIFT we sit out, the opponent's HUB is the active one (Table 6-3), so
-      // parking in front of our own HUB accomplishes nothing: it cannot score and cannot bank. A
-      // ROBOT that is already full goes to deny their window; one that still has room keeps
-      // gathering, so the next window opens with a full load.
+      // During an ALLIANCE SHIFT we sit out the opponent's HUB is the active one (Table 6-3), so
+      // parking in front of our own HUB accomplishes nothing: it cannot score and cannot bank. The
+      // 25 s is still 25 s of MATCH, though, so this branch is an ordered ladder of the plays that
+      // remain legal, and it has no IDLE outcome: standing still here throws away a sixth of the game.
+      // Every rung is a deliberate choice — deny their window once we are too full to bank more, herd
+      // FUEL if the user designated this ROBOT a pusher, gather for the next window, hand a load to a
+      // partner who still has room so this ROBOT can keep sweeping, and failing all that put the body
+      // on their shooter.
       if (!hubActive) {
+        // 1. A ROBOT the user designated as a pusher herds loose FUEL home — the shift is free time for
+        //    the job nobody has spare capacity for during our own window.
+        if (rb.pushMode === 'active' && rb.carrying === 0) {
+          const pt = pushTarget(rb, obs);
+          if (pt) {
+            why.reason = 'idle-push';
+            return ret({ mode: INTENT.PUSH, target: pt });
+          }
+        }
+        // 2. Bank FUEL for the window that opens next. This sits ABOVE the deny rung on measurement:
+        //    with the ROBOTs going to defend at 81% fill instead of filling up, we lost ≈30 points and
+        //    won 26% of MATCHes against the greedy baseline; banking first instead gave ≈+35 points and
+        //    42% (two disjoint 24-MATCH seed sets). A full ROBOT has nothing to bank and falls through,
+        //    and COLLECT is gated on room because a full intake swallows nothing — driving around with a
+        //    full hopper is an IDLE frame wearing a different label.
+        if (rb.carrying < rb.capacity) {
+          const bankCell = pickCluster(rb, obs);
+          if (bankCell) {
+            why.reason = 'idle-bank';
+            return ret({ mode: INTENT.COLLECT, target: { x: bankCell.x, y: bankCell.y } });
+          }
+        }
+        // 2b. Our HUB is about to go live again. A ROBOT that is holding FUEL has one thing worth more
+        //     than denying their window or delivering to the HP: being on its own shooting lane at the
+        //     tick the window opens, because the load in its hopper is the only FUEL that can score on
+        //     that tick. The dump rules above take over the moment obs.hub[side] flips, so this rung
+        //     only has to get the ROBOT home in time. It sits above the deny and deliver rungs on
+        //     purpose: both of them spend the load or the position this one is buying.
+        const onIn = secsUntilHubOn(obs);
+        if (rb.carrying > 0 && onIn !== null && onIn <= weights.darkPrepSec) {
+          why.reason = `idle-prep(${onIn.toFixed(1)}s)`;
+          return ret({ mode: INTENT.STOCKPILE, target: g.shootStations[rb.slot] });
+        }
+        // 2c. Hand the hopper to the HUMAN PLAYER at the OUTPOST. A full ROBOT has nothing left to
+        //     bank, and the CORRAL takes FUEL it is already holding (§5.9.2), so this trades a load it
+        //     cannot score this window for a whole window of sweeping, with the HP converting the load
+        //     in parallel. Capped by worthDelivering: the HP throws far more slowly than a ROBOT does,
+        //     so a backlog past its rate is FUEL taken off the FIELD for nothing.
+        if (worthDelivering(obs, side, rb)) {
+          why.reason = 'idle-feed';
+          return ret({ mode: INTENT.FEED });
+        }
+        // 3. Nothing left to bank: deny their window instead.
         if (frac >= weights.pressWhenIdleFrac) {
           const tgt = pickDefenseTarget(rb, obs);
           if (tgt >= 0) {
             why.reason = 'idle-press';
             return ret({ mode: INTENT.DEFEND, targetRobot: tgt });
           }
-          if (rb.carrying >= rb.capacity) {
-            // Nothing to press, nothing to bank: hold position clear of the HUB face rather than
-            // sitting on the spot a defender will camp.
-            const back = side === 'red' ? -1 : 1;
-            why.reason = 'idle-stage';
-            return ret({ mode: INTENT.STOCKPILE, target: { x: g.shoot.x + back * 60, y: g.shoot.y } });
+        }
+        // 4. Hand the load to a partner who still has room, so this ROBOT can go back out.
+        if (frac > 0 && rb.passMode !== 'off') {
+          const pt = passTarget(rb, obs, rb.passMode === 'eager');
+          if (pt) {
+            why.reason = 'idle-pass';
+            return ret({ mode: INTENT.PASS, target: pt });
           }
         }
-        const idleCell = pickCluster(rb, obs);
-        why.reason = 'idle-bank';
-        return ret(idleCell ? { mode: INTENT.COLLECT, target: { x: idleCell.x, y: idleCell.y } } : { mode: INTENT.IDLE });
+        // 5. Last productive option: deny their shooter wherever they are, at any fill level ("block").
+        const blockTgt = pickDefenseTarget(rb, obs);
+        if (blockTgt >= 0) {
+          why.reason = 'idle-block';
+          return ret({ mode: INTENT.DEFEND, targetRobot: blockTgt });
+        }
+        // 6. Truly nothing available: hold useful ground clear of the HUB face rather than standing on
+        //    the spot their defender will camp next window. Each ROBOT backs off its OWN lane, so three
+        //    idle ROBOTs queue up instead of shoving each other around one shared point.
+        const back = side === 'red' ? -1 : 1;
+        why.reason = 'idle-hold';
+        return ret({ mode: INTENT.STOCKPILE, target: { x: g.shootStations[rb.slot].x + back * 60, y: g.shootStations[rb.slot].y } });
       }
 
       const cell = pickCluster(rb, obs);
+      // An active pusher only swaps collecting for herding when collecting would mean crossing to the
+      // far half anyway: then it herds FUEL home instead of dribbling it back one trip at a time. A
+      // loaded ROBOT keeps to the dump rules above, and FUEL already on our half is simply collected.
+      if (rb.pushMode === 'active' && rb.carrying === 0 && cell) {
+        const far = side === 'red' ? cell.x > GEO.centerLineX : cell.x < GEO.centerLineX;
+        if (far) {
+          const pt = pushTarget(rb, obs);
+          if (pt) {
+            why.reason = 'push';
+            return ret({ mode: INTENT.PUSH, target: pt });
+          }
+        }
+      }
       why.reason = 'collect';
-      return ret(cell ? { mode: INTENT.COLLECT, target: { x: cell.x, y: cell.y } } : { mode: INTENT.STOCKPILE, target: g.shoot });
+      return ret(cell ? { mode: INTENT.COLLECT, target: { x: cell.x, y: cell.y } } : { mode: INTENT.STOCKPILE, target: g.shootStations[rb.slot] });
+    },
+
+    // The HUMAN PLAYER is its own actor, not a ROBOT, so it gets its own decision rather than a slot
+    // in `currentPlan`. The rule is shared with the baselines (ai.js) so the OUTPOST never becomes a
+    // second, hidden difference between the two sides of a comparison.
+    human(obs, side) {
+      return humanChoice(obs, side);
     },
   };
 }
