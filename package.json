@@ -6,9 +6,16 @@
   "description": "REBUILT (2026 FRC) match simulator and tactical planner. Rules transcribed from the 2026 Game Manual TU21.",
   "scripts": {
     "serve": "node scripts/serve.mjs",
+    "check": "node scripts/check_web.mjs",
     "verify": "node scripts/verify.mjs",
     "bench": "node scripts/bench.mjs",
     "probe": "node scripts/probe.mjs",
-    "train": "node scripts/train.mjs"
+    "train": "node scripts/train.mjs",
+    "ab": "node scripts/ab.mjs",
+    "mirror": "node scripts/mirror.mjs",
+    "dark": "node scripts/dark.mjs",
+    "gap": "node scripts/gap.mjs",
+    "lever": "node scripts/lever.mjs",
+    "team": "node scripts/team.mjs"
   }
 }

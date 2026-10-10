@@ -40,14 +40,15 @@ for (let m = 0; m < MATCHES; m++) {
     collectTicks += rs.collectTicks;
     intakeTicks += rs.intakeTicks;
   }
-  // The recorded frames are 0.5 s apart and sample every 4th FUEL, so multiply by 4 to recover the
-  // loose-FUEL count. sampleFuel() only reports FUEL resting on the FIELD (state 0).
+  // sampleFuel() records every ball on the FIELD (no stride), so this is the real loose-FUEL count —
+  // it used to be a 1-in-4 sample and had to be multiplied back up, which is also why the replay used
+  // to draw a FIELD that looked emptier than it was.
   for (const f of res.timeline) {
     let free = 0;
-    for (const [x] of f.fuel) {
+    for (const [, , , kind] of f.fuel) {
+      if (kind === 4) continue; // in flight, not resting on the carpet
       free += 1;
     }
-    free *= 4;
     freeMean += free;
     freeFrames += 1;
     if (free < freeMin) freeMin = free;
@@ -59,11 +60,11 @@ for (let m = 0; m < MATCHES; m++) {
 }
 
 const n = (v) => (v / MATCHES).toFixed(1);
-console.log(`greedy vs greedy, ${MATCHES} matches, sourced presets (254/1678/1690 vs 4414/5940/118)`);
+console.log(`greedy vs greedy, ${MATCHES} matches, sourced presets (254/1678/1690 vs 4414/5940/11019)`);
 console.log(`  RED  total ${n(agg.red)}  (FUEL ${n(agg.redFuel)}, AUTO FUEL ${n(agg.redAuto)})`);
 console.log(`  BLUE total ${n(agg.blue)}  (FUEL ${n(agg.blueFuel)}, AUTO FUEL ${n(agg.blueAuto)})`);
 console.log(`\nloose FUEL on FIELD: mean ${(freeMean / freeFrames).toFixed(0)}  min ${freeMin}  (504 staged, 24 preloaded)`);
-console.log(`intake ticks ${intakeTicks} of ${collectTicks} collect ticks (${((intakeTicks / Math.max(1, collectTicks)) * 100).toFixed(0)}% actually swallowed FUEL)`);
+console.log(`intake ticks ${intakeTicks} of ${collectTicks} sweep ticks (${((intakeTicks / Math.max(1, collectTicks)) * 100).toFixed(0)}% actually swallowed FUEL; sweeping includes SCORE/PASS)`);
 console.log(`robot-frames in SCORE ${scoreFrames} / IDLE ${idleFrames}`);
 
 const activeSec = 20 + 10 + 2 * 25 + 30; // AUTO + TRANSITION + the two own SHIFTs + END GAME
