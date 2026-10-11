@@ -16,6 +16,19 @@ const MATCHES = Number(process.env.MATCHES || 8);
 const OPP = process.env.OPP || 'greedy';
 const ITER = Number(process.env.ITER || 200);
 const SEED = Number(process.env.SEED || 90001);
+// W=defenseEfficacy:0.1 moves one shipped weight and leaves the rest alone, so the intent mix can be
+// read as the consequence of that number rather than of a different build. Same convention as ab.mjs.
+const weights = cloneWeights(DEFAULT_WEIGHTS);
+for (const part of (process.env.W || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  const [key, val] = part.split(':');
+  const k0 = key && key.trim();
+  if (!k0 || !(k0 in DEFAULT_WEIGHTS)) {
+    console.log(`  unknown weight "${k0}" in W (have: ${Object.keys(DEFAULT_WEIGHTS).join(', ')})`);
+    continue;
+  }
+  weights[k0] = Number(val);
+  console.log(`  override ${k0} = ${val}`);
+}
 
 const blank = () => ({ frames: 0, mix: new Map(), launches: 0, passes: 0, near: 0 });
 // Keyed by who is DRIVING, not by ALLIANCE colour: the AI plays red on every MATCH below, so `ai` is
@@ -29,7 +42,7 @@ const oppSide = 'blue';
 for (let m = 0; m < MATCHES; m++) {
   const { res } = runOneOpponentMatch({
     kind: OPP,
-    weights: cloneWeights(DEFAULT_WEIGHTS),
+    weights: cloneWeights(weights),
     seed: SEED + m * 977,
     iterations: ITER,
     aiSide,

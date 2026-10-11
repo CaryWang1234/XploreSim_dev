@@ -41,14 +41,24 @@ export const DEFAULT_WEIGHTS = {
   // fast-model shape (also evolved, because they steer which strategy looks best)
   traversalOverhead: 1.6,
   aimOverhead: 0.8561,
-  // 0 ships, and it is a measurement rather than a guess. With any positive value the search buys
-  // DEFEND with the ROBOT's own collection trips, and on this build that trade loses: setting this to
-  // 0 was better in all four seed families it was tested on, worth +13.0 of margin and +8.0 of score at
-  // n=192 against greedy (+2.9 win points, which is inside the ±3.5-point binomial error of an arm that
-  // size — the margin and the score are the signal). An earlier build showed the opposite sign because
-  // the engine credited G418/G419/G415-417 fouls to the side that COMMITTED them; with that fixed, a
-  // defender's pin costs points instead of earning them. DEFEND still blocks shots in the engine, which
-  // this model cannot see at all, so 0 prices what is measurable and stays silent about the rest.
+  // 0 ships, and that 0 is now a measured verdict rather than a hedge. Two facts:
+  //
+  // (1) The play is real. `scripts/defcal.mjs` pins both sides' plans (no search involved) and sets the
+  // defender count k; over 48 MATCHes per arm with one trio on both ALLIANCES, one ROBOT standing in the
+  // lane costs the attacker a factor of 0.923 (254/1678/1690) and 0.935 (4414/5940/11019), and the cost
+  // grows with k (0.819 at two, 0.695 at three) because a blocked launch loses the whole trip, not the
+  // point. fastsim.js now charges that per defender instead of one factor for the strongest one.
+  //
+  // (2) The search cannot be given the number yet. Setting it to the fitted 0.1 and A/B-ing it against
+  // the same weight at 0 — 96 MATCHes, four disjoint seed families — COST 9.9 points of win rate, 14.1
+  // of score and 8.9 of margin, and the reason is visible in the dark-window mix: DEFEND goes from 16.1%
+  // of frames to 26.6% and COLLECT falls from 63.3% to 54.9%. The model prices what a defender takes from
+  // the opponent and under-prices what it costs its own side: a DEFEND role in an INACTIVE window looks
+  // nearly free because that ROBOT could not score anyway, when the engine is losing the whole bank it
+  // would have carried into the next window (bankCredit is one hopper, not 25 s of sweeping).
+  //
+  // So the geometry is in the model and the price stays at 0 until the cost side is fixed with it. A
+  // half-priced play is worse than an unpriced one: it moves the decision without moving the ledger.
   defenseEfficacy: 0,
   bankCredit: 0.2434,
   // FUEL cluster targeting
@@ -72,6 +82,12 @@ export const DEFAULT_WEIGHTS = {
   dumpBeforeIdleSec: 3.2918,
   // While our own HUB is inactive the opponent's is the active one (Table 6-3), so a ROBOT that is
   // this full cannot bank any more and goes to deny their window instead of waiting at our HUB.
+  //
+  // Probed on 2026-10-10: driving this knob to both ends of its domain changes not one MATCH out of
+  // 150, because rung 2 of the idle ladder already sends every ROBOT with `carrying < capacity` off to
+  // bank, so only a full one (frac = 1.0) ever reaches the rung that reads this number, and 0.5 and 1.0
+  // are the same instruction there. The denying that does happen comes from the last rung ("block", at
+  // any fill level) and from the macro plan, not from here.
   pressWhenIdleFrac: 0.8083,
   // How many seconds before our HUB goes live a carrying ROBOT stops denying and goes to hold on its
   // own shooting lane. Denying is worth something, but the SHIFT opens with a burst: a ROBOT that is
@@ -230,7 +246,7 @@ export function scoutCaps(profiles, rng, noise = 0.12) {
 // how the opponent splits its ROBOTs between scoring / defending / climbing, and how much FUEL
 // it has banked into the HUB.
 // ---------------------------------------------------------------------------------------------
-const ARCH_FEATURES = {
+export const ARCH_FEATURES = {
   rush: { score: 0.78, defend: 0.04, climb: 0.1, climbLvl: 0.35, autoFuel: 0.7 },
   balanced: { score: 0.58, defend: 0.14, climb: 0.16, climbLvl: 0.7, autoFuel: 0.55 },
   defensive: { score: 0.4, defend: 0.4, climb: 0.14, climbLvl: 0.4, autoFuel: 0.4 },

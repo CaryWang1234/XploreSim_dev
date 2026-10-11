@@ -8,14 +8,19 @@
     "serve": "node scripts/serve.mjs",
     "check": "node scripts/check_web.mjs",
     "verify": "node scripts/verify.mjs",
+    "golden": "node scripts/golden.mjs",
     "bench": "node scripts/bench.mjs",
     "probe": "node scripts/probe.mjs",
     "train": "node scripts/train.mjs",
+    "night": "node scripts/night.mjs",
     "ab": "node scripts/ab.mjs",
     "mirror": "node scripts/mirror.mjs",
+    "seat": "node scripts/seat.mjs",
     "dark": "node scripts/dark.mjs",
     "gap": "node scripts/gap.mjs",
     "lever": "node scripts/lever.mjs",
-    "team": "node scripts/team.mjs"
+    "team": "node scripts/team.mjs",
+    "cap": "node scripts/cap.mjs",
+    "defcal": "node scripts/defcal.mjs"
   }
 }

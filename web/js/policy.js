@@ -18,7 +18,7 @@ import {
   withAuto,
   estimateAlliance,
 } from './fastsim.js';
-import { DEFAULT_WEIGHTS, MacroPlanner, OpponentModel, scoutCaps, humanChoice, worthDelivering } from './ai.js';
+import { DEFAULT_WEIGHTS, MacroPlanner, OpponentModel, ARCH_FEATURES, scoutCaps, humanChoice, worthDelivering } from './ai.js';
 
 const CELL_X = 48;
 const CELL_Y = 48;
@@ -61,8 +61,25 @@ export function createAI(opts) {
   const scoreCommit = new Map();
   let claims = {};
   let defClaims = {};
+  // Roles the plan assigned that could not be executed on the previous decision round: a DEFEND slot
+  // with no opponent to shadow, a SCORE slot with no pile in reach. This is the cheapest honest signal
+  // that the plan is wrong, and it is free — it is collected from the targets the micro policy had to
+  // give up on anyway, not from a second search.
+  let stuck = new Set();
+  let lastStuck = new Set();
   let lastDecisionT = -1;
   let lastObserveT = -Infinity;
+  // A SHIFT is 25 s of commitment and the world does not hold still for it: a ROBOT gets disabled, the
+  // midfield runs dry, the opponent's plan changes. The macro search used to run only at period start —
+  // seven looks a MATCH — so a plan made against a three-ROBOT opponent kept assigning roles to a machine
+  // that had already stopped moving. Re-search when the state CLASS changes, not when it drifts: the
+  // signature below is deliberately coarse (who is disabled, and whether there is FUEL to collect at
+  // all), with a cooldown so a borderline case cannot re-plan every round. The cost is that a role can
+  // change under a ROBOT mid-window; the latches in `scoreCommit` and the corridor commit are what keep
+  // that from interrupting a dump or a climb already in progress.
+  let lastReplanSig = '';
+  let lastReplanT = -Infinity;
+  const REPLAN_COOLDOWN_SEC = 6;
   const oppHistory = { fuel: 0, tower: 0, lastFuel: 0, lastT: 0 };
   let mctsStats = { rollouts: 0, calls: 0, nodes: 0 };
 
@@ -592,6 +609,36 @@ export function createAI(opts) {
     mctsStats.rollouts += r.totalRollouts;
   }
 
+  // The coarse state class the re-plan trigger compares on. Everything in it is a fact the plan was made
+  // against and cannot re-derive from the clock: which ROBOTs are still moving, whether there is any
+  // FUEL left to cycle at all, whether the assigned roles are still executable, and — the part a driver
+  // actually re-reads mid-SHIFT — what the opponent model now believes it is looking at. The opponent
+  // terms are the POSTERIOR, not the raw observation: `defenseShare(obs)` swings by deciseconds and
+  // would have the search re-plan every round on noise, while the archetype-weighted expectation only
+  // moves when the evidence has moved.
+  function stateSig(obs, stuckNow) {
+    let down = 0;
+    let oppDown = 0;
+    for (const r of obs.robots) {
+      if (!r.disabled) continue;
+      if (r.alliance === side) down += 1;
+      else oppDown += 1;
+    }
+    const st = obs.fuel && obs.fuel.state;
+    let loose = 0;
+    if (st) for (let i = 0; i < obs.fuel.total; i++) if (st[i] === 0) loose += 1;
+    const post = oppModel.posterior();
+    let top = '';
+    let bestP = -1;
+    let defend = 0;
+    for (const [k, p] of Object.entries(post)) {
+      if (p > bestP) { bestP = p; top = k; }
+      const f = ARCH_FEATURES[k];
+      if (f) defend += p * f.defend;
+    }
+    return `${obs.period}|${down}|${oppDown}|${loose === 0 ? 'dry' : loose < 60 ? 'thin' : 'wet'}|${stuckNow ? stuckNow.size : 0}|${top}|${Math.round(defend * 8)}`;
+  }
+
   return {
     name,
     side,
@@ -609,9 +656,13 @@ export function createAI(opts) {
       scoreCommit.clear();
       claims = {};
       defClaims = {};
+      stuck = new Set();
+      lastStuck = new Set();
       mctsStats = { rollouts: 0, calls: 0, nodes: 0 };
       lastDecisionT = -1;
       lastObserveT = -Infinity;
+      lastReplanSig = '';
+      lastReplanT = -Infinity;
     },
 
     onPeriodStart(period, obs) {
@@ -635,6 +686,12 @@ export function createAI(opts) {
       }
       if (period === 'AUTO') planAuto(obs);
       else planPeriod(period, obs);
+      // The plan just made IS the current state class: remember it with a clean slate, or the next
+      // decision round would read a "change" that is only the plan being fresh.
+      stuck = new Set();
+      lastStuck = new Set();
+      lastReplanSig = stateSig(obs, stuck);
+      lastReplanT = obs.t;
     },
 
     decide(rb, obs) {
@@ -644,6 +701,20 @@ export function createAI(opts) {
         lastDecisionT = t;
         claims = {};
         defClaims = {};
+        // Re-search the SHIFT we are in if the world changed class since the plan was made — a ROBOT
+        // went, the opponent went, the FIELD ran out of FUEL to cycle, or a role the plan assigned has
+        // become impossible to execute. AUTO is 20 s and its plan is committed before anything is
+        // observable, and TRANSITION is 10 s of both HUBs live, so neither is re-planned.
+        if (!planOverride && period !== 'AUTO' && period !== 'TRANSITION' && t - lastReplanT >= REPLAN_COOLDOWN_SEC) {
+          const sig = stateSig(obs, stuck);
+          if (sig !== lastReplanSig) {
+            lastReplanSig = sig;
+            lastReplanT = t;
+            planPeriod(period, obs);
+          }
+        }
+        stuck = lastStuck;
+        lastStuck = new Set();
       }
       // The posterior is only as good as its sample count, and period starts give it just seven
       // looks per MATCH. Re-observe on a timer so the END GAME TOWER read reflects behaviour
@@ -707,6 +778,8 @@ export function createAI(opts) {
             why.reason = 'defend';
             return ret({ mode: INTENT.DEFEND, targetRobot: tgt });
           }
+          // The plan asked this ROBOT to deny somebody and there is nobody left to deny.
+          lastStuck.add(rb.slot);
           role = ROLE.SCORE;
         }
       }
@@ -784,6 +857,14 @@ export function createAI(opts) {
         //    42% (two disjoint 24-MATCH seed sets). A full ROBOT has nothing to bank and falls through,
         //    and COLLECT is gated on room because a full intake swallows nothing — driving around with a
         //    full hopper is an IDLE frame wearing a different label.
+        //
+        //    It also sits above the rung below, and that ordering was re-tested on this build rather than
+        //    inherited: gating the sweep on "can this pickup AND the return fit inside the time left"
+        //    moved the proxy exactly the way you would hope — FUEL carried by a ROBOT off its own lane at
+        //    the reopen fell from 37.8% to 14.3% — and cost 5.7 points of win rate, with all four seed
+        //    families going down or flat (87.5→79.2, 81.3→75.0, 79.2→70.8, 70.8→70.8%). Being home in
+        //    position is worth less than the load you did not pick up to get there, because the load is
+        //    what the window is FOR. `scripts/cap.mjs` still prints the number so the trade stays visible.
         if (rb.carrying < rb.capacity) {
           const bankCell = pickCluster(rb, obs);
           if (bankCell) {
@@ -838,6 +919,7 @@ export function createAI(opts) {
         //    idle ROBOTs queue up instead of shoving each other around one shared point.
         const back = side === 'red' ? -1 : 1;
         why.reason = 'idle-hold';
+        lastStuck.add(rb.slot);
         return ret({ mode: INTENT.STOCKPILE, target: { x: g.shootStations[rb.slot].x + back * 60, y: g.shootStations[rb.slot].y } });
       }
 
@@ -856,6 +938,7 @@ export function createAI(opts) {
         }
       }
       why.reason = 'collect';
+      if (!cell) lastStuck.add(rb.slot); // a SCORE role with no FUEL within reach anywhere on the FIELD
       return ret(cell ? { mode: INTENT.COLLECT, target: { x: cell.x, y: cell.y } } : { mode: INTENT.STOCKPILE, target: g.shootStations[rb.slot] });
     },
 

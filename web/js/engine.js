@@ -207,8 +207,9 @@ export const footprintHalf = (rb) => rb.footprintHalfIn || ROBOT_PERIMETER_HALF_
 // that face and no wider than the car is swept up. `MOUTH_REACH_IN` is how far BEHIND the face line
 // the rollers still reach, which is how a ROBOT that has already driven past a pile keeps eating it.
 // It is the one number here that is a guess rather than a geometry, so `sc.intakeReach` overrides it
-// and the greedy mirror is what settles it: at 6 in the mirror scores 625.2 against the real Einstein
-// Finals average of 627, at 12 in it scores 642.9. 6 is the value that ships.
+// and the greedy mirror is what settles it: on the current engine the same 192-MATCH mirror reads 615.7
+// at 6 in, 612.9 at 7 and 632.1 at 12. Six inches ships because that is what a ball resting against a
+// bumper is worth, not because it is the highest score, and scripts/golden.mjs fails when it moves.
 export const MOUTH_REACH_IN = 6;
 
 // Projected half-width of a square onto a world axis: the two edge directions each contribute their
@@ -436,6 +437,14 @@ export function simulateMatch(opts) {
   // manual calls the NEUTRAL ZONE pile a corral rather than a perfect grid (§6.3.4.1), which the
   // jitter preserves. With sc.fuelSpacing = 0 the lattice is skipped and the balls land uniformly at
   // random, which is the control the verifier compares against.
+  //
+  // The pile is laid out in POINT-SYMMETRIC PAIRS about the centre of the box, and that is a fix, not a
+  // flourish. A row-major lattice is not: its part-filled row sits at one end of the box and its stagger
+  // flips with row parity, so the heap is heavier on one ALLIANCE's approach. In a same-trio, same-policy
+  // mirror MATCH that showed up as blue taking 57 of 96 AUTOs and 7.7 more AUTO FUEL (63.0 against 70.7),
+  // while with sc.fuelSpacing = 0 — an unbiased scatter — the same 96 MATCHes split 46/50. Every mirror
+  // number and the "chance of winning AUTO" the page reports inherit that bias, so the lattice now emits
+  // ball k together with its 180° partner and the odd ball, if any, at the exact centre.
   function neutralLayout(count, cx, cy, hx, hy) {
     const out = [];
     const scatter = () => {
@@ -447,7 +456,11 @@ export function simulateMatch(opts) {
       return out;
     }
     const d = FUEL_SEPARATION_IN;
-    const rows = Math.max(1, Math.floor((hy * 2) / ((d * Math.sqrt(3)) / 2)));
+    // An EVEN number of rows is what makes the stagger mirror: row r pairs with row (rows-1-r), and those
+    // have opposite parity only when rows is even, so each row's half-cell shift is cancelled by its
+    // partner's. Columns are centred on cx and the rows on cy for the same reason.
+    let rows = Math.max(2, Math.floor((hy * 2) / ((d * Math.sqrt(3)) / 2)));
+    if (rows % 2) rows += 1;
     const cols = Math.max(1, Math.ceil(count / rows));
     const a = (hx * 2) / cols;
     if (a < fuelSpacing) {
@@ -456,34 +469,44 @@ export function simulateMatch(opts) {
       return out;
     }
     const b = (hy * 2) / rows;
+    // The one point that is its own 180° partner is the centre of the box, so an odd count puts its
+    // spare ball there — and puts it first, so the pair loop below cannot land a ball on top of it.
+    if (count % 2) out.push({ x: cx, y: cy });
+    const pairs = [];
+    for (let r = 0; r < rows / 2; r++) {
+      const yOff = (r - (rows - 1) / 2) * b;
+      const stag = r % 2 ? a / 2 : -a / 2;
+      for (let c = 0; c < cols; c++) {
+        const xOff = (c - (cols - 1) / 2) * a;
+        pairs.push({ x: cx + xOff + stag, y: cy + yOff, r: Math.abs(yOff), c: Math.abs(xOff) });
+      }
+    }
+    // Fill from the CENTER outward, so a part-filled box leaves the corners empty rather than one whole
+    // side, and the heap stays symmetric in both axes.
+    pairs.sort((p, q) => p.r - q.r || p.c - q.c);
     const r = Math.min(0.35, (a - fuelSpacing) / 2);
-    for (let k = 0; k < count; k++) {
-      const col = k % cols;
-      const row = Math.floor(k / cols);
-      let x = cx - hx + a / 2 + col * a + (row % 2 ? a / 2 : 0);
-      if (x > cx + hx) x -= a;
-      const y = cy - hy + b / 2 + row * b;
-      let px = x;
-      let py = y;
+    const clear = (x, y) => out.every((p) => (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) >= fuelSpacing * fuelSpacing);
+    for (let k = 0; k < Math.floor(count / 2) && k < pairs.length; k++) {
+      const p = pairs[k];
+      const q = { x: 2 * cx - p.x, y: 2 * cy - p.y };
+      let px = p.x;
+      let py = p.y;
+      let qx = q.x;
+      let qy = q.y;
+      // One nudge shared by the pair (+ on one, − on its partner) so the jitter cannot break the
+      // symmetry the layout was built for, and both land or neither does.
       for (let t = 0; t < 6 && r > 0.05; t++) {
-        const jx = x + (rng() - 0.5) * 2 * r;
-        const jy = y + (rng() - 0.5) * 2 * r;
-        let clear = true;
-        for (const p of out) {
-          const dx = p.x - jx;
-          const dy = p.y - jy;
-          if (dx * dx + dy * dy < fuelSpacing * fuelSpacing) {
-            clear = false;
-            break;
-          }
-        }
-        if (clear) {
-          px = jx;
-          py = jy;
+        const jx = (rng() - 0.5) * 2 * r;
+        const jy = (rng() - 0.5) * 2 * r;
+        if (clear(p.x + jx, p.y + jy) && clear(q.x - jx, q.y - jy)) {
+          px = p.x + jx;
+          py = p.y + jy;
+          qx = q.x - jx;
+          qy = q.y - jy;
           break;
         }
       }
-      out.push({ x: px, y: py });
+      out.push({ x: px, y: py }, { x: qx, y: qy });
     }
     return out;
   }
@@ -595,6 +618,12 @@ export function simulateMatch(opts) {
           fuelScored: 0,
           fuelWasted: 0,
           fuelDelivered: 0,
+          // The part of `fuelDelivered` that came from shoving a LOOSE FUEL through the CORRAL opening
+          // while driving past it, rather than from a ROBOT that was asked to FEED. Both are legal play
+          // (§5.9.2 puts no intent requirement on the bottom opening, and G427 only caps how much may be
+          // stored), but they are different mechanisms, and the verifier has to be able to tell a wall
+          // leak from the action it is testing.
+          fuelPushedIn: 0,
           fouls: 0,
           foulPointsGiven: 0,
           pins: 0,
@@ -620,6 +649,14 @@ export function simulateMatch(opts) {
       });
     });
   }
+
+  // Every per-ROBOT pass in the tick below walks this array in build order, and build order is red's
+  // three machines first. On a FUEL both alliances could take this tick, and on the 0.2 s decision pass
+  // where whichever side picks a pile first keeps it, that is a first-mover advantage: in a same-roster
+  // mirror MATCH it measured +18.3 +- 4.6 points to red. Serving the ALLIANCES in alternating order,
+  // swapping every tick, is what makes a mirror MATCH actually symmetric.
+  const serveOrder = [robots, robots.filter((r) => r.alliance === 'blue').concat(robots.filter((r) => r.alliance === 'red'))];
+
   // Preload (§6.3.4-C, capped by G303-I): each ROBOT may start supporting up to 8 FUEL.
   for (const rb of robots) {
     const pre = Math.min(FUEL.maxPreloadPerRobot, rb.capacity);
@@ -1051,6 +1088,7 @@ export function simulateMatch(opts) {
             if (pools[rb.alliance].corral < FUEL.corralCapacity) {
               storeInCorral(i, rb.alliance);
               rb.stat.fuelDelivered += 1;
+              rb.stat.fuelPushedIn += 1;
               moved = true;
             }
             // A full CORRAL refuses the ball, so it stays on the carpet where it was.
@@ -1534,6 +1572,7 @@ export function simulateMatch(opts) {
 
   for (let step = 0; step < steps; step++) {
     const t = step * tick;
+    const order = serveOrder[step % 2];
     const p = periodAt(t);
     if (p !== period) {
       period = p;
@@ -1602,7 +1641,10 @@ export function simulateMatch(opts) {
     }
 
     if (step % decideEvery === 0) {
-      for (const side of ['red', 'blue']) {
+      // The side that decides first keeps the pile it names, so the decision pass needs an order that
+      // actually turns over: decisions run every `decideEvery` ticks, and alternating on `step % 2` here
+      // would land on the same parity every time and never swap.
+      for (const side of Math.floor(step / decideEvery) % 2 === 0 ? ['red', 'blue'] : ['blue', 'red']) {
         const obs = makeObs(t);
         // The HP is a decision-maker of its own: a policy that does not implement `human` leaves it
         // parked at the CHUTE, which is a legal (if wasteful) way to run a MATCH.
@@ -1621,7 +1663,7 @@ export function simulateMatch(opts) {
     for (const rb of robots) rb.defensePressure = 0;
 
     // ---- DEFEND: denial pressure and PIN adjudication (G418) ----
-    for (const rb of robots) {
+    for (const rb of order) {
       if (rb.disabled) continue;
       if (rb.g420Cooldown > 0) rb.g420Cooldown -= tick;
       if (rb.intent.mode !== INTENT.DEFEND) {
@@ -1689,7 +1731,7 @@ export function simulateMatch(opts) {
 
     const towerProtected = t > TIME.matchSec - TIME.endgameSec;
 
-    for (const rb of robots) {
+    for (const rb of order) {
       if (rb.disabled) continue;
       // A ROBOT on the TOWER plays no further part in the MATCH. TELEOP TOWER points are assessed
       // when the MATCH ends (§6.5.2), so a ROBOT that has climbed during TELEOP is up there for

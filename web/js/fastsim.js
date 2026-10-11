@@ -149,28 +149,37 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
 
     // Opponent defenders deny our best ROBOTs, and the suppression now has to REACH the estimate.
     // This block used to scale `rates` and then throw the array away — the scoring loop below
-    // recomputed each ROBOT's output from cycleOf — so defenceEfficacy was dead code, DEFEND cost the
+    // recomputed each ROBOT's output from cycleOf — so defenseEfficacy was dead code, DEFEND cost the
     // search nothing, and it parked two ROBOTs on defence in every window it sat out.
     //
-    // ONE defender's worth, not one factor per defender: the engine keeps
-    // `tgt.defensePressure = max(pressure over attackers)`, so a second ROBOT shadowing the same
-    // opponent adds nothing. Multiplying a factor per defender made a two-defender plan look twice as
-    // strong as it is, which is what the search then bought — the strongest available defender sets
-    // the pressure and the rest are wasted bodies.
+    // ONE defender's worth used to be the whole story: the engine kept `tgt.defensePressure =
+    // max(pressure over attackers)`, so a second ROBOT shadowing the same opponent added nothing, and
+    // multiplying a factor per defender made a two-defender plan look twice as strong as it was. That
+    // was true while defence was only a rate penalty. Since the body became a square and a shot became
+    // a swept line, defence also BLOCKS launches, and blocking does sum per defender — measured by
+    // `scripts/defcal.mjs` (48 MATCHes per arm, one trio on both ALLIANCES, red pinned all-SCORE):
+    //     k defenders   opponent FUEL   factor   launches blocked per MATCH
+    //     0             672.2           1.000    6.0
+    //     1             620.3           0.923    24.3
+    //     2             550.3           0.819    45.2
+    //     3             467.1           0.695    98.8
+    // so the marginal defender costs the attacker about as much as the first, and the per-defender
+    // product is the right shape now. It is applied to the top-k attackers, because a defender shadows
+    // one opponent at a time; the fit is deliberately the k=1 number, which under-prices k=2 rather
+    // than over-prices it, since over-pricing defence is the failure this search has had twice.
     const rateScale = caps.map(() => 1);
     const defenderSlots = [];
     for (let i = 0; i < Math.min(oppRoles ? oppRoles.length : 0, oppCaps.length); i++) {
       if (oppRoles[i] === ROLE.DEFEND) defenderSlots.push(i);
     }
-    if (defenderSlots.length) {
+    if (defenderSlots.length && w.defenseEfficacy > 0) {
       const skill = Math.max(...defenderSlots.map((i) => (oppCaps[i] && oppCaps[i].defenseSkill) || 0.5));
-      const factor = 1 / (1 + w.defenseEfficacy * skill);
-      let bestIdx = -1;
-      let bestRate = 0;
-      for (let i = 0; i < rates.length; i++) if (rates[i] > bestRate) { bestRate = rates[i]; bestIdx = i; }
-      if (bestIdx >= 0) {
-        rates[bestIdx] *= factor;
-        rateScale[bestIdx] *= factor;
+      const perDefender = 1 / (1 + w.defenseEfficacy * skill);
+      const ranked = rates.map((r, i) => ({ r, i })).sort((a, b) => b.r - a.r);
+      for (let d = 0; d < Math.min(defenderSlots.length, ranked.length); d++) {
+        const i = ranked[d].i;
+        rates[i] *= perDefender;
+        rateScale[i] *= perDefender;
       }
     }
 

@@ -19,6 +19,10 @@ const state = {
   calibration: null,
   result: null,
   timeline: null,
+  // What produced the replay currently on screen. Kept as run, because the sliders and the ROBOT cards
+  // may have moved since, and Export has to write down what actually ran rather than what is showing.
+  lastPayload: null,
+  lastCtx: null,
   frame: 0,
   playT: 0,
   playing: false,
@@ -1484,24 +1488,32 @@ function renderRules() {
     ['Semifinals SF1 / SF2', '7407 / 5940 / 9470', '443', '868 / 2910 / 2046', '665'],
   ];
   const simRows = [
-    ['Engine throughput (greedy vs greedy, neither side defending; scripts/probe.mjs, n=6)', '5.61 FUEL/s per alliance', 'real finals ≈4.7 FUEL/s. RED 587.2 and BLUE 667.5 on the same 6 MATCHes'],
-    ['Engine total per alliance (the GREEDY mirror: the hand-written cycling plan on both sides, nobody defending, n=24 ×2 seed sets)', '625.2 (624.9 and 625.5)', 'this is the calibration anchor: 0.3% under the real Einstein average of 627. Both sides of a mirror share one random stream, so read it as ±2%. scripts/mirror.mjs prints all three mirrors below'],
-    ["The AI's own searched mirror (the same 48 MATCHes)", '589.8 (589.1 and 590.6)', '35 points under the greedy mirror: in a mirror both sides deny each other and the denial cancels, but the search still pays for thinking about it'],
-    ['The same plan PINNED to all-SCORE (the search is not consulted, nobody defends)', '660.6 (656.6 and 664.6)', 'what the search spends on DEFEND, given back without changing the policy the ROBOTs actually fly'],
-    ['The AI against greedy (four disjoint seed families, n=192; scripts/ab.mjs)', '26.3% win, 625.7 against 661.3', 'per family 19.8 / 29.2 / 22.9 / 33.3%. Pinned to one seat: red 21.9%, blue 32.0% — the field itself is far more asymmetric, since greedy against greedy scores 592.5 as red and 652.3 as blue, so the search still recovers most of the red seat handicap. Pinning every ROBOT to "always cycle" drops it to 4.9% and −86.4 of margin, so the macro search is worth +21.4 win points and +50.8 of margin. It was 39.1% on the previous build: a foul-direction bug was PAYING the AI for pinning opponents, and the full-width rear mouth rewards a plan that spends its frames sweeping'],
-    ['Teamwork weight mateSeparation, ablated at n=192 (SWEEP="mateSeparation:0")', '0.6 ships; 0 costs 5.0 of score and 5.3 of margin but gains 3.4 win points', 'prices a candidate pile down for having a partner near it, at the partner\'s body or at the target the partner is already driving at; the penalty dies at 72 in, about two car widths. The two statistics disagree on this build, and the win-rate half of it is inside the ±3.5-point binomial error of a 192-MATCH arm while score and margin both say keep it. scripts/team.mjs prints the bunching proxies'],
-    ['Same mirror with hard-contact fouls on (sc.contactFouls = true: §7.4.4 G415/G416/G417)', '586.8 against 589.8 off (n=48)', '3 points, inside the ±2% a mirror carries, and the greedy mirror does not move at all (625.2 either way) because the hand-written cycling plan never makes a deliberate hit. The card is not priced — a second YELLOW CARD in a phase is a RED CARD, i.e. a DISQUALIFICATION, and that tournament cost is not modelled (see Hard contact between ROBOTS)'],
+    ['Engine throughput (greedy vs greedy, neither side defending; scripts/probe.mjs, n=12)', '5.44 FUEL/s per alliance', 'real finals ≈4.7 FUEL/s. One trio (254/1678/1690) on both ALLIANCES, which scored 624.8 as red and 612.8 as blue on the same 12 MATCHes'],
+    ['Engine total per alliance (the GREEDY mirror: the hand-written cycling plan on both sides, nobody defending, n=24 ×2 seed sets ×2 trios)', '615.7 (611.3 and 620.1)', 'this is the calibration anchor: 1.8% under the real Einstein average of 627. A mirror means the same three ROBOTs on both sides — it used to be one trio per side, which made every mirror a roster comparison. Both trios are run separately and pooled. Read one mirror as ±2%. scripts/mirror.mjs'],
+    ["The AI's own searched mirror (the same MATCHes)", '606.2 (592.5 and 619.9)', '10 points under the greedy mirror: in a mirror both sides deny each other and the denial cancels, but the search still pays for thinking about it'],
+    ['The same plan PINNED to all-SCORE (the search is not consulted, nobody defends)', '662.0 (629.7 and 694.3)', 'what the search spends on DEFEND, given back without changing the policy the ROBOTs actually fly'],
+    ['The AI against greedy (four disjoint seed families, n=96; scripts/ab.mjs)', '79.7% win, 667.2 against 623.6', 'per family 87.5 / 81.3 / 79.2 / 70.8%. Pinning every ROBOT to "always cycle" drops it to 57.8% and 26.3 of margin, so the macro search is worth +21.9 win points while costing 11.3 of its own score: it buys denial with raw FUEL. Taking DEFEND out of the micro policy costs another 8.3 win points, so the denial it pays for is real. Two earlier builds published 39.1% and 26.3% for this number and both were wrong in the same direction — the AI was always dealt 254/1678/1690 and its opponent always drove 4414/5940/11019, which on the same policy is a 59.8-point roster difference'],
+    ['Seat test: the same trio on both sides, red minus blue per MATCH (scripts/mirror.mjs)', 'greedy mirror −1.3 ± 7.2 · pinned mirror +15.2 ± 5.3', '96 MATCHes per mode. The calibration anchor is symmetric (0.2 sem), so there is no seat advantage to price and none of the numbers on this page carries one. The mirror that flies the shipped micro policy still splits 15 points, about 2.9 sem, and scripts/seat.mjs is the tool that localises it — the engine ordering was found that way and fixed, and this remainder is not yet. The page previously claimed red and blue were 60 points apart: that was the two sample rosters, and red was not a seat but a weaker set of machines'],
+    ['Being the AUTO loser is worth about +30 points (scripts/seat.mjs, pinned same-roster mirror, n=16 per arm)', 'red pinned as AUTO winner: red−blue −43.0 ± 6.2 · blue pinned: +24.8 ± 11.0', 'Table 6-3 makes the AUTO winner sit out SHIFT 1 and SHIFT 3, so it plays SHIFT 2 and SHIFT 4 against a FUEL pool the opponent has already been eating from — the loser collects 35 to 50 more FUEL. The other sample trio reads −53.3 and +7.8 for the same two arms: same signs, different sizes. The search has found this on its own: against greedy it scores 55.7 AUTO FUEL where greedy scores 71.5, and it takes AUTO in only 25% of those MATCHes. Note which way the arrow points in each experiment: in the mirror the winner is PINNED, so the 30 points are the window; in a real MATCH winning AUTO is a symptom of a good AUTO, and the two effects run opposite'],
+    ['The engine serves the two ALLIANCES alternately', 'two identical greedy policies: 598.6 vs 630.5 before, 611.0 vs 615.6 after', 'red ROBOTs are built first, so a plain per-ROBOT pass let red take every contested FUEL and name its piles first. That was worth about 30 points between two identical plans, and a mirror is now symmetric by construction rather than by luck. The per-tick order is not enough on its own: decisions happen every 0.2 s, so the ALLIANCE that decides first has to alternate on that clock, not on the tick'],
+    ['What one defender in a shooting lane costs the attacker (scripts/defcal.mjs, both plans pinned so no search is involved, n=48 per arm per trio)', 'factor 0.923 / 0.935 at one defender · 0.819 / 0.870 at two · 0.695 / 0.779 at three', 'the geometric event the analytic model has no representation of. Launches the attacker loses to a body in its lane go 6 → 24 → 45 → 99 a MATCH with 0, 1, 2, 3 defenders, so the marginal defender is worth about as much as the first — fastsim.js now charges defence per defender rather than one factor for the strongest one. The two trios also say the ×skill term is unproven: the higher-skill trio suppressed 1.5% LESS'],
+    ['…and what happened when the search was told that number', 'win −9.9 pts · score −14.1 · margin −8.9 (n=96, four families)', 'defenseEfficacy went back to 0. The mix shows why: the AI dark-window DEFEND share rose 16.1% → 26.6% and COLLECT fell 63.3% → 54.9%, so the search bought the defence it could suddenly see. The model prices what a defender takes from the opponent correctly and under-prices what it costs its own side — defending during your own inactive window looks nearly free when that ROBOT could not score anyway, but the engine loses the whole bank it would have carried into the next window. A half-priced play is worse than an unpriced one'],
+    ['Re-measuring the come-home rung (ARMS=base,noDarkPrep, n=96, four families)', 'win −10.9 pts · score −18.1 · margin −10.7 when it is off', 'darkPrepSec = 4 s is the single most valuable time rule in the policy, and all four seed families move the same way. A two-family sample earlier in the build read −9.4 / −13.3 / −17.3 — same direction, smaller size. Doubling the lead to 8 s gains 1.6 win points and gives back 3.2 of score'],
+    ['A stricter time rule that lost on the score while winning on the proxy', 'FUEL caught off its own lane at a reopen 37.8% → 14.3%, win −5.7 pts (n=96)', 'gating the dark-window sweep on whether the pickup AND the return fit in the time left did exactly what it looks like it should, and every one of the four families went down or flat (87.5→79.2, 81.3→75.0, 79.2→70.8, 70.8→70.8). Reverted. What the AI does with the clock it already has is fine: on the tail of a live window it leaves 1.5% of frames in an unfinished trip where greedy leaves 2.0%, and is caught holding 14.0 FUEL at a window close where greedy holds 21.4 — scripts/cap.mjs prints both'],
+    ['Teamwork weight mateSeparation, ablated at n=96 (SWEEP="mateSeparation:0")', '0.6 ships; removing it moves win +0.5, score +0.5, margin +1.7', 'prices a candidate pile down for having a partner near it, at the partner\'s body or at the target the partner is already driving at; the penalty dies at 72 in, about two car widths. On this build the ablation does not pay for itself on any statistic, so it ships because three ROBOTs converging on one pile is a real failure mode the cameras show, not because a 96-MATCH sample priced it. scripts/team.mjs prints the bunching proxies'],
+    ['The macro search now re-runs inside a SHIFT when the situation changes class', '7 searches a MATCH against a steady opponent, 8 against a random one; win rate unchanged at 79.7%', 'the trigger fires on a ROBOT going down, the FIELD running out of FUEL, an assigned role becoming unexecutable, or the opponent posterior moving to another archetype. Against greedy it essentially never fires and the replay is identical to the previous build to a frame — which is the honest statement: a plan made against a steady opponent is not invalidated by anything that happens next. Cost when it does fire is one extra search'],
+    ['Same mirror with hard-contact fouls on (sc.contactFouls = true: §7.4.4 G415/G416/G417)', 'AI mirror 619.5 on against 616.4 off (n=48 per arm, both trios)', '3 points, inside the ±2% a mirror carries, and the greedy mirror does not move at all because the hand-written cycling plan never makes a deliberate hit. The card is not priced — a second YELLOW CARD in a phase is a RED CARD, i.e. a DISQUALIFICATION, and that tournament cost is not modelled (see Hard contact between ROBOTS)'],
     ['Foul points are charged to the ROBOT that committed them', 'G418, G419 and G415/G416/G417 used to credit the offending side', 'the engine logged the offender all along and the arithmetic handed it the points. The Numbers tab now lists every foul with its second, its clause and the machine, the batch view averages the same per ROBOT, and the chips under the scoreboard jump the replay to them'],
-    ['Intake mouth: a slot across the whole face, reaching 6 in behind the face line', 'greedy mirror 625.2 at 6 in · 642.9 at 12 in', 'the width is the car and is not a guess; how far behind the face line the rollers still grab is, and the mirror sets it. Six inches lands on the real 627 average and twelve would sit 2.9% over it. Back is now the default face on every card, because a Front slot shares its bumper with a front-mounted Dumper shooter'],
-    ['Chassis, on the pinned all-SCORE mirror (n=24 ×2 seed sets; scripts/lever.mjs)', 'swerve 660.6 · mecanum 572.4 · tank 479.1', 'a square ROBOT has to rotate its shooting face onto the HUB, so turn rate is a cycle-time number: a tank drive costs 182 points, 27%. Mecanum is 88 points behind a swerve rather than the 36 it used to be, because the rear mouth is the end that has to arrive first and a mecanum reverse leg runs at 78% of top speed'],
-    ['Mechanism, same mirror', 'turret 698.0 · dumper 610.5', 'an 87-point gap: the turret slews independently and fires on the move, so a slow chassis does not slow its aim; a Dumper has one shooting face and has to point the whole car at the HUB (see Turret or Dumper)'],
-    ['Intake face, same mirror (front / back / left / right; scripts/lever.mjs ONLY=intake)', 'swerve 662.7 · 660.6 · 657.2 · 662.6 — tank 473.1 · 479.1 · 430.6 · 430.2', 'a swerve strafes and spins at full rate so it can lead with any face, and the 5.5-point spread is inside the noise. A tank has no strafe: side mouths cost about 45 points, while the rear one still beats the front by 6 because its reverse leg already points the car away from travel'],
-    ['DRIVER level, same mirror (Average is the reference the page is built on)', 'rookie 601.9 · average 660.6 · good 677.7 · elite 678.6', 'the largest single lever here, 77 points end to end (Table 6-1 DRIVER) — but the last rung is 0.9 points apart, inside the noise, so the ladder stops paying after a competent driver'],
-    ['Same mirror with one ROBOT a side (the bench switch: plays: false, a 1v1)', '341.3 against 660.6 for 3v3', 'a lone ROBOT recovers 52% of its three-ROBOT ALLIANCE; FUEL staging is unchanged (§6.3.4), and this is not a legal MATCH configuration'],
-    ['Loose FUEL on the field (drawn every frame, no sampling)', 'mean 193, min 110', '504 staged = 24/DEPOT + 24/CHUTE + ≤8 preload per ROBOT + the rest midfield (§6.3.4)'],
-    ['Roller independent of the shooter: it picks up during SCORE / PASS', '14% of the 52940 ticks the roller runs swallow a FUEL (n=6)', 'those ticks include SCORE and PASS, not just INTAKE. Bulldozing turns the roller off on purpose, or it would collect what it means to push away'],
-    ['Calibration knob: HUB outlet throughput cap (four outlets, §5.4)', '4.0 FUEL/s', 'backed out from the real average — 504 FUEL on the field means roughly one cycle per match'],
-    ['FUEL scored in AUTO', '≈91 (93.3 red, 88.0 blue, n=6)', 'real finals 111–177, so the engine is low here'],
+    ['Intake mouth: a slot across the whole face, reaching 6 in behind the face line', 'sc.intakeReach 5 → 594.1 · 6 → 615.7 · 7 → 612.9 · 8 → 617.6 · 10 → 625.8 · 12 → 632.1', 'the width is the car and is not a guess; how far BEHIND the face line the rollers still grab is, and the greedy mirror (192 MATCHes per point) is what watches it. Twelve inches is worth 16 points more than the six that ship, and would overshoot the real average of 627, so six is stated as an estimate of what a ball caught against a bumper is and pinned by scripts/golden.mjs rather than asserted as a rule. Back is the default face on every card because a Front slot shares its bumper with a front-mounted Dumper shooter, not because the mirror pays for it (see the intake face row)'],
+    ['Chassis, on the pinned all-SCORE mirror (n=24 ×2 seed sets; scripts/lever.mjs)', 'swerve 629.7 · mecanum 549.2 · tank 446.2', 'a square ROBOT has to rotate its shooting face onto the HUB, so turn rate is a cycle-time number: a tank drive costs 184 points, 29%. Mecanum sits 80 behind a swerve, because the rear mouth is the end that has to arrive first and a mecanum reverse leg runs at 78% of top speed'],
+    ['Mechanism, same mirror', 'turret 685.2 · dumper 591.3', 'a 94-point gap: the turret slews independently and fires on the move, so a slow chassis does not slow its aim; a Dumper has one shooting face and has to point the whole car at the HUB (see Turret or Dumper)'],
+    ['Intake face, same mirror (front / back / left / right; scripts/lever.mjs ONLY=intake)', 'swerve 626.6 · 629.7 · 627.9 · 623.9 — tank 446.6 · 446.2 · 397.8 · 407.3', 'a swerve strafes and spins at full rate, so it can lead with any face and the 5.8-point spread is inside the noise. A tank has no strafe and side mouths cost 39 to 49 points — but front and back are now the same number (0.4 apart), which is the honest answer: the rear mouth was measured worth +20 on the previous layout, and that gain was the asymmetric NEUTRAL ZONE pile, not the face. What still argues for Back is a Front slot sharing its bumper with a front-mounted Dumper shooter'],
+    ['DRIVER level, same mirror (Average is the reference the page is built on)', 'rookie 559.3 · average 629.7 · good 641.7 · elite 656.9', '98 points end to end (Table 6-1 DRIVER), and every rung pays on this build: good to elite is 15.2, above the spread between the two seed sets, where the previous ladder stopped paying after a competent driver'],
+    ['Same mirror with one ROBOT a side (the bench switch: plays: false, a 1v1)', '300.9 against 629.7 for 3v3', 'a lone ROBOT recovers 48% of its three-ROBOT ALLIANCE; FUEL staging is unchanged (§6.3.4), and this is not a legal MATCH configuration'],
+    ['Loose FUEL on the field (drawn every frame, no sampling)', 'mean 226, min 146', '504 staged = 24/DEPOT + 24/CHUTE + ≤8 preload per ROBOT + the rest midfield (§6.3.4)'],
+    ['Roller independent of the shooter: it picks up during SCORE / PASS', '14% of the 97822 ticks the roller runs swallow a FUEL (n=12)', 'those ticks include SCORE and PASS, not just INTAKE. Bulldozing turns the roller off on purpose, or it would collect what it means to push away'],
+    ['Calibration knob: HUB outlet throughput cap (four outlets, §5.4)', '4.2 FUEL/s', 'backed out from the real average and re-derived after the midfield layout was made symmetric: the same 192-MATCH mirror gives 598.6 at 4.0, 615.7 at 4.2, 614.7 at 4.4 and 622.5 at 4.6. Past 4.2 the mean stops moving while the mirror opens a side gap (−14.8 at 4.4, −21.9 at 4.6) that is not yet explained, so the cap stops where the MATCHes still score evenly'],
+    ['FUEL scored in AUTO', '≈83 (81.0 red, 85.8 blue, n=12)', 'real finals 111–177, so the engine is low here'],
   ];
   $('calib-table').innerHTML =
     `<thead><tr><th>Match / metric</th><th>Red</th><th class="mono">Red score</th><th>Blue</th><th class="mono">Blue score</th></tr></thead>` +
@@ -1606,6 +1618,85 @@ function runCtx(matches) {
   };
 }
 
+// A MATCH as a file. The frame log is the payload: the positions come from the engine's own recorder, so
+// Import replays exactly what the exporting build produced without re-running the engine, the weights or
+// the search — which is the point, since the receiving browser may be a different build entirely.
+//
+// Anchors are written every 2nd tick. The renderer blends between anchors, and at 0.4 s a ROBOT doing
+// 150 in/s covers 60 in between two of them, which trips blendFrame's teleport guard and reads as
+// jumping; 0.2 s keeps it under the threshold and the file at ~3 MB.
+const MATCH_FORMAT = 'xplore-match-v1';
+const EXPORT_STRIDE = 2;
+
+function exportMatch() {
+  const res = state.result;
+  const tl = state.timeline;
+  if (!res || !tl || tl.length < 2) {
+    status('Nothing to export yet — run One match or a Monte-Carlo batch first.', 'err');
+    return;
+  }
+  const frames = [];
+  for (let i = 0; i < tl.length; i += EXPORT_STRIDE) frames.push(tl[i]);
+  if ((tl.length - 1) % EXPORT_STRIDE) frames.push(tl[tl.length - 1]);
+  const { timeline, recorded, ...result } = res;
+  const file = {
+    format: MATCH_FORMAT,
+    exportedAt: new Date().toISOString(),
+    strideSec: +(0.1 * EXPORT_STRIDE).toFixed(2),
+    ctx: state.lastCtx || {},
+    inputs: state.lastPayload || null,
+    result,
+    frames,
+  };
+  const totals = result.final ? `${Math.round(result.final.red.total)}-${Math.round(result.final.blue.total)}` : 'batch';
+  const stamp = file.exportedAt.slice(0, 10);
+  const name = `rebuilt-match-${file.ctx.seed || 'x'}-${totals}-${stamp}.json`;
+  const text = JSON.stringify(file);
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  status(`Exported ${name} (${(text.length / 1048576).toFixed(1)} MB, ${frames.length} anchors at ${file.strideSec} s).`, 'ok');
+}
+
+function importMatch(text, label) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    status(`${label} is not readable JSON: ${e.message}`, 'err');
+    return;
+  }
+  if (!data || data.format !== MATCH_FORMAT) {
+    status(`${label} is not a saved match (format says ${JSON.stringify((data && data.format) || null)}).`, 'err');
+    return;
+  }
+  if (!data.result || !Array.isArray(data.frames) || data.frames.length < 2) {
+    status(`${label} has no frame log in it — export the MATCH, not just the summary.`, 'err');
+    return;
+  }
+  cancelAnimationFrame(state.raf);
+  state.playing = false;
+  $('btn-play').textContent = 'Play';
+  state.timeline = data.frames;
+  state.lastCtx = data.ctx || {};
+  state.lastPayload = data.inputs || null;
+  // renderResult reads the frame log off the result (the IDLE share and the intent mix are computed from
+  // it), and Export writes the anchors once, into `frames`, rather than twice. Hand them back.
+  data.result.timeline = data.frames;
+  $('scrub').max = String(data.frames.length - 1);
+  renderResult(data.result, state.lastCtx);
+  setFrame(0);
+  const who = data.result.final
+    ? `${Math.round(data.result.final.red.total)} / ${Math.round(data.result.final.blue.total)}`
+    : `${data.result.matches || '?'} MATCHes`;
+  status(`Imported ${(data.ctx && data.ctx.seed) || 'seed ?'} · ${who} · recorded ${data.exportedAt || 'date unknown'}. Setup panels still show your current inputs.`, 'ok');
+}
+
 async function runSingle() {
   busy(true);
   state.lastRun = 'single';
@@ -1613,10 +1704,13 @@ async function runSingle() {
   status(opp.mode === 'aiVsAi' ? 'Running one match, both sides searching…' : 'Running one match…', 'busy');
   setProgress(true, 0.1, 'AI is searching shift plans');
   try {
-    const res = await ask('mc', payload({ matches: 1, recordFirst: true, mode: opp.mode, opponentKind: opp.kind, aiSide: plannedSide(), planSnapshot: true }));
+    const p = payload({ matches: 1, recordFirst: true, mode: opp.mode, opponentKind: opp.kind, aiSide: plannedSide(), planSnapshot: true });
+    state.lastPayload = p;
+    const res = await ask('mc', p);
     state.timeline = res.timeline;
+    state.lastCtx = runCtx(1);
     $('scrub').max = String(Math.max(0, (res.timeline ? res.timeline.length : 1) - 1));
-    renderResult(res, runCtx(1));
+    renderResult(res, state.lastCtx);
     setFrame(0);
     state.playing = true;
     state.lastTs = 0;
@@ -1640,14 +1734,17 @@ async function runMonteCarlo() {
   status(`Monte Carlo, ${matches} matches${opp.mode === 'aiVsAi' ? ', both sides searching' : ''}…`, 'busy');
   setProgress(true, 0, '0%');
   try {
+    const p = payload({ matches, recordFirst: true, mode: opp.mode, opponentKind: opp.kind, aiSide: plannedSide() });
+    state.lastPayload = p;
     const res = await ask(
       'mc',
-      payload({ matches, recordFirst: true, mode: opp.mode, opponentKind: opp.kind, aiSide: plannedSide() }),
-      (p) => setProgress(true, p.done / p.total, `${p.done}/${p.total}`),
+      p,
+      (pp) => setProgress(true, pp.done / pp.total, `${pp.done}/${pp.total}`),
     );
     state.timeline = res.timeline;
+    state.lastCtx = runCtx(matches);
     $('scrub').max = String(Math.max(0, (res.timeline ? res.timeline.length : 1) - 1));
-    renderResult(res, runCtx(matches));
+    renderResult(res, state.lastCtx);
     setFrame(0);
     status(`Monte Carlo done (${matches} matches)`, 'ok');
   } catch (e) {
@@ -1786,6 +1883,20 @@ function boot() {
   });
   $('btn-ev-prev').addEventListener('click', () => jumpEvent(-1));
   $('btn-ev-next').addEventListener('click', () => jumpEvent(1));
+  $('btn-export').addEventListener('click', exportMatch);
+  $('btn-import').addEventListener('click', () => $('inp-import').click());
+  $('inp-import').addEventListener('change', async (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    status(`Reading ${f.name}…`, 'busy');
+    try {
+      importMatch(await f.text(), f.name);
+    } catch (e) {
+      status(`Could not read ${f.name}: ${e.message}`, 'err');
+    } finally {
+      ev.target.value = '';
+    }
+  });
   $('btn-play').addEventListener('click', () => {
     if (!state.timeline) return;
     state.playing = !state.playing;

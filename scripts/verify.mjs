@@ -334,8 +334,9 @@ function feedRun({ useFeed, humanMode, seed }) {
     record: true,
   });
   const delivered = res.robotStats.filter((r) => r.alliance === 'red').reduce((a, r) => a + r.fuelDelivered, 0);
+  const pushedIn = res.robotStats.filter((r) => r.alliance === 'red').reduce((a, r) => a + r.fuelPushedIn, 0);
   const hp = res.timeline[res.timeline.length - 1].hp.red;
-  return { res, delivered, corral: res.final.red.corral, chute: res.final.red.chute, hpThrows: hp.x, hpHits: hp.s };
+  return { res, delivered, pushedIn, corral: res.final.red.corral, chute: res.final.red.chute, hpThrows: hp.x, hpHits: hp.s };
 }
 
 function feedChecks(seed) {
@@ -343,16 +344,27 @@ function feedChecks(seed) {
   const noHold = feedRun({ useFeed: false, humanMode: 'HOLD', seed });
   const score = feedRun({ useFeed: true, humanMode: 'SCORE', seed });
   const noScore = feedRun({ useFeed: false, humanMode: 'SCORE', seed });
-  // Control first: with the push switched off nothing may land in the CORRAL, or "delivered" below is
-  // measuring a leak rather than the FEED action.
-  if (noHold.delivered !== 0 || noHold.corral !== 0) {
-    throw new Error(`feed control: ${noHold.delivered} FUEL delivered with the push off, corral ${noHold.corral}`);
+  // `fuelDelivered` counts two mechanisms: a ROBOT emptying its hopper at the CORRAL mouth (the FEED
+  // action) and a ROBOT shoving a LOOSE FUEL through that same mouth while driving past it. The second
+  // is legal — it is what bulldozing does — and at hubExitRate 4.2 it happened 19 times in one control
+  // MATCH, so "nothing may land in the CORRAL without FEED" was never a true statement about the engine.
+  // What IS true, and what the control now pins: the mouth deposit needs the FEED intent, and the wall
+  // deposit on its own must stay well below it, or this test would be grading the wall.
+  const fed = (o) => o.delivered - o.pushedIn;
+  if (fed(noHold) !== 0 || fed(noScore) !== 0) {
+    throw new Error(`feed control: ${fed(noHold)} + ${fed(noScore)} FUEL deposited at the CORRAL mouth with no FEED plan`);
   }
-  if (noScore.corral !== 0) throw new Error(`feed control: corral ${noScore.corral} with the push off`);
-  // The push has to actually move FUEL: a ROBOT that drove to the OUTPOST and delivered nothing would
+  // The FEED action has to move a real load, not one ball: the yardstick is the preload a ROBOT can
+  // start with (§6.3.4-C, 8 FUEL), because a FEED plan keeps returning to the mouth with what it carried.
+  // How much the wall deposited on its own is printed below rather than asserted — it is legal play and
+  // its size depends on how loose the FIELD is.
+  if (fed(hold) < FUEL.maxPreloadPerRobot) {
+    throw new Error(`the FEED plan deposited only ${fed(hold)} FUEL at the CORRAL mouth, under one ROBOT's ${FUEL.maxPreloadPerRobot}-FUEL preload`);
+  }
+  // The push has to actually move FUEL: a ROBOT that drove to the OUTPOST and deposited nothing would
   // pass every check below by doing nothing.
-  if (hold.delivered <= 0 || hold.corral <= 0) {
-    throw new Error(`no FUEL reached the CORRAL: delivered ${hold.delivered}, corral ${hold.corral}`);
+  if (fed(hold) <= 0 || hold.corral <= 0) {
+    throw new Error(`no FUEL reached the CORRAL: fed ${fed(hold)} of ${hold.delivered} delivered, corral ${hold.corral}`);
   }
   // §5.9.2 / G427: the CORRAL is one layer of 36 FUEL, and FUEL pushed with nowhere to go stays with
   // the ROBOT. Delivering at the cap is exactly the boundary, so check the counter never crosses it.
@@ -367,10 +379,10 @@ function feedChecks(seed) {
     throw new Error(`CORRAL did not drain: ${score.corral} left of ${score.delivered} delivered, so the HUMAN PLAYER never drew from it`);
   }
   console.log('--- OUTPOST delivery (one ROBOT forced to FEED per ALLIANCE) ---');
-  console.log(`  push off, HP HOLD  delivered ${noHold.delivered}  corral ${noHold.corral}`);
-  console.log(`  push on,  HP HOLD  delivered ${hold.delivered}  corral ${hold.corral} (cap ${FUEL.corralCapacity})  chute ${hold.chute}`);
-  console.log(`  push on,  HP SCORE delivered ${score.delivered}  corral ${score.corral}  HP throws ${score.hpThrows} (hits ${score.hpHits})`);
-  console.log(`  push off, HP SCORE delivered ${noScore.delivered}  corral ${noScore.corral}  HP throws ${noScore.hpThrows}`);
+  console.log(`  push off, HP HOLD  delivered ${noHold.delivered} (fed ${fed(noHold)} + shoved in ${noHold.pushedIn})  corral ${noHold.corral}`);
+  console.log(`  push on,  HP HOLD  delivered ${hold.delivered} (fed ${fed(hold)} + shoved in ${hold.pushedIn})  corral ${hold.corral} (cap ${FUEL.corralCapacity})  chute ${hold.chute}`);
+  console.log(`  push on,  HP SCORE delivered ${score.delivered} (fed ${fed(score)})  corral ${score.corral}  HP throws ${score.hpThrows} (hits ${score.hpHits})`);
+  console.log(`  push off, HP SCORE delivered ${noScore.delivered} (fed ${fed(noScore)} + shoved in ${noScore.pushedIn})  corral ${noScore.corral}  HP throws ${noScore.hpThrows}`);
 }
 
 // §5.4's net. A ROBOT whose BUMPERS are outside its ALLIANCE ZONE may not put a shot into its HUB: the

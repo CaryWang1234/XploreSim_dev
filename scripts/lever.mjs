@@ -44,8 +44,11 @@ function pinnedMirror(prep) {
     let sum = 0;
     for (let i = 0; i < MATCHES; i++) {
       const sc = { ...defaultScenario(), ...SCENARIO, seed: (seed + i * 7919) >>> 0 };
-      const redAll = makeAlliance(SAMPLES.slice(0, 3).map(prep), 'red');
-      const blueAll = makeAlliance(SAMPLES.slice(3, 6).map(prep), 'blue');
+      // Both ALLIANCES fly the same trio: with one trio on each side, a lever's delta carries the
+      // difference between two ROSTERS as well as the change being measured (mirror.mjs has the story).
+      const trio = SAMPLES.slice(0, 3).map(prep);
+      const redAll = makeAlliance(trio, 'red');
+      const blueAll = makeAlliance(trio, 'blue');
       const plan = emptyPlan();
       const mk = (side, profiles, oppProfiles, rngSeed) =>
         createAI({

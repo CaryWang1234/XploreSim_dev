@@ -580,10 +580,14 @@ export function defaultScenario() {
     // Alliance), and with only 504 FUEL on the FIELD (§6.3.4) an ALLIANCE can only reach that by
     // recirculating FUEL about once a MATCH. The 0.1 s kinematic engine has no other ceiling on
     // tempo, so without this every ALLIANCE cycles a fountain and roughly doubles the real score.
-    // Verified: the greedy mirror (scripts/mirror.mjs, n=24 x 2 seed sets) lands on 611 against the
-    // real average of 627, and a lower value matches the real average more exactly but drains the
-    // FIELD of loose FUEL, which distorts the END GAME. 4.0 keeps both in range.
-    hubExitRate: 4.0,
+    // Verified: the greedy mirror (scripts/mirror.mjs, n=24 x 2 seed sets x both trios) lands on 615.7
+    // against the real average of 627, with the red-minus-blue split inside its error bar (-1.3 +- 7.2).
+    // Swept on the current engine: 4.0 -> 598.6, 4.2 -> 615.7, 4.4 -> 614.7, 4.6 -> 622.5. Past 4.2 the
+    // mean stops moving while the mirror develops a side gap (4.4: red-blue -14.8 +- 6.5, 4.6: -21.9 +-
+    // 7.3) that is not yet explained, so the cap stops where the MATCHes still score evenly. 4.0 keeps
+    // both in range too, at 4.5% under the real average; the value was re-derived after the NEUTRAL ZONE
+    // layout was made point-symmetric, which took about 20 points out of every mirror.
+    hubExitRate: 4.2,
     faultsEnabled: true,
     // §7.4.4 G415/G416/G417 (opponent interaction) are off by default. The rules are real, but the one
     // number they need - how often a hard collision actually damages a ROBOT - has no real-world anchor

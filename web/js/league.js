@@ -145,17 +145,24 @@ export function buildAlliances(profilesRed, profilesBlue) {
   return { red: makeAlliance(profilesRed, 'red'), blue: makeAlliance(profilesBlue, 'blue') };
 }
 
+// The six sample cards make two trios, and every comparison in this file used to put one trio on each
+// side: the AI always drove 254/1678/1690 and its opponent always drove 4414/5940/11019. That is not a
+// mirror, and the rosters are not equal — greedy against greedy, one trio per side, scores 592.5 with
+// the first and 652.3 with the second, so 59.8 of the "AI is only 26.3% against greedy" figure was the
+// roster the AI happened to be dealt, not its policy.
+//
+// A MATCH is now played with the SAME trio on both sides and the trio alternates across the sample, so
+// each match isolates policy and the set still covers both rosters.
+const ROSTERS = [[SAMPLES[0], SAMPLES[1], SAMPLES[2]], [SAMPLES[3], SAMPLES[4], SAMPLES[5]]];
+const mirroredRosters = (i) => ROSTERS[Math.abs(i) % ROSTERS.length];
+
 // `aiOptions` reaches createAI verbatim and is how an ablation is expressed: planOverride pins the
 // macro plan (so the search is skipped), debug collects the decision log. It is spread FIRST so it
 // can never quietly change which ROBOTs are on the field or which side the AI plays.
-export function runOneOpponentMatch({ kind, weights, seed, record = false, scenarioOverride = {}, aiSide = 'red', iterations = 200, aiOptions = {} }) {
+export function runOneOpponentMatch({ kind, weights, seed, record = false, scenarioOverride = {}, aiSide = 'red', iterations = 200, aiOptions = {}, rosterIdx = null }) {
   const sc = { ...defaultScenario(), ...scenarioOverride, seed };
-  const profiles = [SAMPLES[0], SAMPLES[1], SAMPLES[2]];
-  const profB = [SAMPLES[3], SAMPLES[4], SAMPLES[5]];
-  // Same ROBOTs on both sides whenever the AI plays a baseline, so the comparison isolates policy.
-  const redProfiles = aiSide === 'red' ? profiles : profB;
-  const blueProfiles = aiSide === 'red' ? profB : profiles;
-  const alliances = buildAlliances(redProfiles, blueProfiles);
+  const profiles = mirroredRosters(rosterIdx === null ? seed : rosterIdx);
+  const alliances = buildAlliances(profiles, profiles);
   const ai = createAI({
     ...aiOptions,
     side: aiSide,
@@ -214,11 +221,13 @@ export function evaluateVsBaseline({ kind, weights, matches = 30, seed = 1000, i
   let traversal = 0;
   let energized = 0;
   for (let i = 0; i < matches; i++) {
-    // Alternating seats is the default because the two are not equivalent: the HUB windows and the
-    // AUTO tie-break are not mirror images, so a fixed seat measures that asymmetry instead of the
-    // policy. `seat` pins it, which is what the Tactics tab's red/blue selector exposes to a user.
-    const aiSide = seat === 'red' || seat === 'blue' ? seat : i % 2 === 0 ? 'red' : 'blue';
-    const { res } = runOneOpponentMatch({ kind, weights, seed: seed + i * 977, aiSide, iterations, scenarioOverride, aiOptions });
+    // Alternating seats is the default because the two are not equivalent, and `seat` pins one so the
+    // Tactics tab's red/blue selector can ask the question a user asks. The seat changes every TWO
+    // MATCHes while the roster changes every MATCH (i % 2), which crosses them: had both alternated on
+    // i, a pinned seat would also be a pinned roster and "red 21.9% vs blue 32.0%" would have been
+    // partly two different ROBOTs.
+    const aiSide = seat === 'red' || seat === 'blue' ? seat : Math.floor(i / 2) % 2 === 0 ? 'red' : 'blue';
+    const { res } = runOneOpponentMatch({ kind, weights, seed: seed + i * 977, aiSide, rosterIdx: i % 2, iterations, scenarioOverride, aiOptions });
     const me = sideScore(res, aiSide);
     const them = sideScore(res, aiSide === 'red' ? 'blue' : 'red');
     aiTotal += me.total;
@@ -248,17 +257,16 @@ export function evaluateVsBaseline({ kind, weights, matches = 30, seed = 1000, i
 // A-vs-B over many seeds, alternating ALLIANCE colour. Either side may be 'ai' (weighted) or a
 // baseline kind, which is what the benchmark panel reports as head-to-head evidence.
 export function headToHead({ kindA, kindB, A = DEFAULT_WEIGHTS, B = DEFAULT_WEIGHTS, matches = 20, seed = 500, iterations = 200 }) {
-  const profA = [SAMPLES[0], SAMPLES[1], SAMPLES[2]];
-  const profB = [SAMPLES[3], SAMPLES[4], SAMPLES[5]];
   let aWins = 0;
   let bWins = 0;
   let aScore = 0;
   let bScore = 0;
   for (let i = 0; i < matches; i++) {
-    const aSide = i % 2 === 0 ? 'red' : 'blue';
-    const redProfiles = aSide === 'red' ? profA : profB;
-    const blueProfiles = aSide === 'red' ? profB : profA;
-    const alliances = buildAlliances(redProfiles, blueProfiles);
+    // Both sides fly the SAME trio every MATCH (see mirroredRosters), and the seat turns over every two
+    // MATCHes while the trio turns over every one, so neither arm is dealt the better ROBOTs.
+    const aSide = Math.floor(i / 2) % 2 === 0 ? 'red' : 'blue';
+    const profiles = mirroredRosters(i % 2);
+    const alliances = buildAlliances(profiles, profiles);
     const make = (which, side, weights) =>
       which === 'ai'
         ? createAI({
@@ -329,19 +337,22 @@ export function smoothUtility(res, aiSide) {
 // match on seeds it had never seen. Averaging over families is what makes this score track the part
 // that transfers, at the same total MATCH cost.
 const FAMILY_STRIDE = 1000003;
+export { FAMILY_STRIDE };
 
-export function fitness({ weights, opponent = null, matches = 6, seed = 4242, iterations = 140, scenarioOverride = {}, families = 1 }) {
+// The per-MATCH utilities, which is what a paired comparison needs: two weight vectors scored on the
+// SAME seed set differ by luck in the layouts they were dealt, and subtracting MATCH by MATCH cancels
+// that luck. `fitness` is just the mean of this, so every number measured with it stays comparable.
+export function fitnessTrace({ weights, opponent = null, matches = 6, seed = 4242, iterations = 140, scenarioOverride = {}, families = 1 }) {
   const fams = Math.max(1, Math.min(families, matches));
-  let total = 0;
+  const out = [];
   for (let i = 0; i < matches; i++) {
-    const aiSide = i % 2 === 0 ? 'red' : 'blue';
+    const aiSide = Math.floor(i / 2) % 2 === 0 ? 'red' : 'blue';
     const useSelf = opponent && i % 2 === 1;
     const sc = { ...defaultScenario(), ...scenarioOverride, seed: (seed + (i % fams) * FAMILY_STRIDE + Math.floor(i / fams) * 613) >>> 0 };
-    const profiles = [SAMPLES[0], SAMPLES[1], SAMPLES[2]];
-    const profB = [SAMPLES[3], SAMPLES[4], SAMPLES[5]];
-    const redProfiles = aiSide === 'red' ? profiles : profB;
-    const blueProfiles = aiSide === 'red' ? profB : profiles;
-    const alliances = buildAlliances(redProfiles, blueProfiles);
+    // The same trio on both sides, and the trio turns over on i while the seat turns over on i/2, so a
+    // weight vector cannot be fitted to one roster and then judged as if it had flown both.
+    const profiles = mirroredRosters(i % 2);
+    const alliances = buildAlliances(profiles, profiles);
     const me = createAI({
       side: aiSide,
       weights: cloneWeights(weights),
@@ -373,9 +384,14 @@ export function fitness({ weights, opponent = null, matches = 6, seed = 4242, it
       bluePolicy: aiSide === 'red' ? other : me,
       scenario: sc,
     });
-    total += smoothUtility(res, aiSide);
+    out.push(smoothUtility(res, aiSide));
   }
-  return total / matches;
+  return out;
+}
+
+export function fitness({ weights, opponent = null, matches = 6, seed = 4242, iterations = 140, scenarioOverride = {}, families = 1 }) {
+  const v = fitnessTrace({ weights, opponent, matches, seed, iterations, scenarioOverride, families });
+  return v.reduce((a, b) => a + b, 0) / v.length;
 }
 
 export function evolve({

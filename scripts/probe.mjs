@@ -8,8 +8,10 @@ import { makeAlliance, SAMPLES, defaultScenario } from '../web/js/model.js';
 import { greedyPolicy } from '../web/js/league.js';
 
 const MATCHES = Number(process.env.MATCHES || 6);
-const profRed = [SAMPLES[0], SAMPLES[1], SAMPLES[2]];
-const profBlue = [SAMPLES[3], SAMPLES[4], SAMPLES[5]];
+// One trio, both ALLIANCES. The Red/Blue columns used to be two different ROSTERS, which made the
+// roster gap readable as a seat gap (see mirror.mjs); now they are the same ROBOTs on the two halves
+// of the same field, so the split between them is what a seat is actually worth.
+const prof = [SAMPLES[0], SAMPLES[1], SAMPLES[2]];
 
 const agg = { red: 0, blue: 0, redFuel: 0, blueFuel: 0, redAuto: 0, blueAuto: 0 };
 let collectTicks = 0;
@@ -23,8 +25,8 @@ let freeFrames = 0;
 for (let m = 0; m < MATCHES; m++) {
   const sc = { ...defaultScenario(), seed: 90001 + m * 313 };
   const res = simulateMatch({
-    redAlliance: makeAlliance(profRed, 'red'),
-    blueAlliance: makeAlliance(profBlue, 'blue'),
+    redAlliance: makeAlliance(prof, 'red'),
+    blueAlliance: makeAlliance(prof, 'blue'),
     redPolicy: greedyPolicy('red'),
     bluePolicy: greedyPolicy('blue'),
     scenario: sc,
@@ -60,7 +62,7 @@ for (let m = 0; m < MATCHES; m++) {
 }
 
 const n = (v) => (v / MATCHES).toFixed(1);
-console.log(`greedy vs greedy, ${MATCHES} matches, sourced presets (254/1678/1690 vs 4414/5940/11019)`);
+console.log(`greedy vs greedy, ${MATCHES} matches, one trio (${prof.map((p) => p.team).join('/')}) on both ALLIANCES`);
 console.log(`  RED  total ${n(agg.red)}  (FUEL ${n(agg.redFuel)}, AUTO FUEL ${n(agg.redAuto)})`);
 console.log(`  BLUE total ${n(agg.blue)}  (FUEL ${n(agg.blueFuel)}, AUTO FUEL ${n(agg.blueAuto)})`);
 console.log(`\nloose FUEL on FIELD: mean ${(freeMean / freeFrames).toFixed(0)}  min ${freeMin}  (504 staged, 24 preloaded)`);
