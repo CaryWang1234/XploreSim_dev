@@ -25,7 +25,11 @@ export const INTENT = {
 // "unable to drive" is a 20-second window, not a wreck.
 const capability = (rb) => Math.min(rb.health, rb.impairLeft > 0 ? rb.impairFactor : 1);
 
-// A PASS throws FUEL toward a partner instead of at a HUB, so it flies longer and lands loose.
+// A PASS throws FUEL toward a partner instead of at a HUB, so it flies longer and lands loose. The
+// arc is one fixed lob: a short pass and a max-range pass are both in the air for this long, which is
+// what the model spends its flight parameter on. The reach is not here — it is the ROBOT's own
+// `passRangeIn` (model.js), because a 4.5-ball-wide shooter and a rookie's belt do not throw the same
+// distance.
 const PASS_FLIGHT_SEC = 1.1;
 // A PASS aim point has to clear the HUB box, because FUEL has to land on the FIELD: the point of the
 // check is physical, not anti-exploit. A pass cannot score by construction — resolveFlight awards
@@ -1228,21 +1232,39 @@ export function simulateMatch(opts) {
   // Both are satisfied by construction here: targets are our own half or our own ALLIANCE ZONE, never
   // an opponent, and the landing is clamped inside the FIELD. A caller that aims too close to a HUB is
   // refused as well, so a pass can never become a disguised scoring shot.
+  //
+  // 射程 is what limits the throw. `rb.passRangeIn` is how far the shooter's one fixed punch carries,
+  // so an aim point past it is not reached: the FUEL leaves on the same line and comes down `passRangeIn`
+  // out, short of the partner, as loose FUEL on whoever's carpet it landed on. That is the whole content
+  // of "only some ROBOTS can pass from their opponent's ALLIANCE ZONE to their own" — the zones' front
+  // edges are 334 in apart and their middle lines 493 in (§5.2/§5.3), so the play needs the reach, and
+  // a ROBOT without it has to drive home or find a partner who is nearer.
   function releasePass(rb, tgt) {
     if (!tgt) return -1;
     const hub = GEO[rb.alliance].hub;
-    if (Math.hypot(tgt.x - hub.x, tgt.y - hub.y) < PASS_HUB_CLEARANCE_IN) return -1;
+    const dx = tgt.x - rb.x;
+    const dy = tgt.y - rb.y;
+    const d = Math.hypot(dx, dy);
+    if (d <= 0) return -1;
+    const range = rb.passRangeIn;
+    const k = Math.min(1, range / d);
+    const ax = rb.x + dx * k;
+    const ay = rb.y + dy * k;
+    // Clearance is tested on where the FUEL actually comes down, not on where it was aimed: a throw
+    // that falls short of a HUB-side target still lands at the HUB, and that is a scoring shot in
+    // everything but the label.
+    if (Math.hypot(ax - hub.x, ay - hub.y) < PASS_HUB_CLEARANCE_IN) return -1;
     for (let i = 0; i < total; i++) {
       if (fstate[i] === 3 && fholder[i] === rb.idx) {
         fstate[i] = 4;
         fholder[i] = -1;
         fshooter[i] = rb.idx;
         fhub[i] = 3;
-        fpx[i] = tgt.x;
-        fpy[i] = tgt.y;
+        fpx[i] = ax;
+        fpy[i] = ay;
         ftimer[i] = PASS_FLIGHT_SEC;
-        fvx[i] = (tgt.x - rb.x) / PASS_FLIGHT_SEC;
-        fvy[i] = (tgt.y - rb.y) / PASS_FLIGHT_SEC;
+        fvx[i] = dx * k / PASS_FLIGHT_SEC;
+        fvy[i] = dy * k / PASS_FLIGHT_SEC;
         fox[i] = rb.x;
         foy[i] = rb.y;
         rb.carrying -= 1;

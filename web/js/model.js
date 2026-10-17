@@ -122,6 +122,9 @@ export const DRIVERS = [
 ];
 export const DRIVER_OF = (key) => DRIVERS.find((d) => d.key === key) || DRIVERS[1];
 
+// The 射程 fallback for a profile that never set one: see the field note in DEFAULT_PROFILE.
+export const PASS_RANGE_DEFAULT_IN = 260;
+
 export const DEFAULT_PROFILE = () => ({
   team: 0,
   name: 'Sample robot',
@@ -150,6 +153,16 @@ export const DEFAULT_PROFILE = () => ({
   shootAccuracy: 0.85, // P(scored) at the reference distance
   refShootDistanceIn: 60,
   accuracyFalloff: 0.0025, // accuracy lost per inch beyond the reference distance
+  // 射程 — how far a PASS actually carries. A shooter throws with one fixed punch, so an aim point
+  // past this is simply not reached: the FUEL comes down short, on the same line, and becomes loose
+  // FUEL wherever it landed. This is what makes the cross-FIELD pass a capability rather than a free
+  // action. No rule caps it (§5.3 lets a ROBOT drive into the opponent's ALLIANCE ZONE from
+  // TRANSITION on, and G407 only governs a launch INTO the HUB), so the only limit is the machine.
+  // The geometry: the front edges of the two ALLIANCE ZONES are 334 in apart and their middle lines
+  // 493 in, so a collector that is well inside the opponent's zone and wants to hand its load to a
+  // partner in its own needs about 400-500 in of reach. 260 is a mid-power shooter: enough to reach a
+  // partner waiting near midfield, not enough to reach home from the far zone.
+  passRangeIn: PASS_RANGE_DEFAULT_IN,
   // Crossing the BUMP/TRENCH band between the ALLIANCE ZONE and the NEUTRAL ZONE. `null` follows the
   // height rule in derived(); set them explicitly to override it (a tall ROBOT that still clears the
   // TRENCH arm, or a short one the team keeps away from it).
@@ -161,6 +174,8 @@ export const DEFAULT_PROFILE = () => ({
   //             auto    throw to a partner already back on our half, when that is a real shortcut
   //             eager   throw to our own ALLIANCE ZONE as soon as the hopper is worth it, whether or
   //                     not a partner is there to take the load (it becomes loose FUEL for later)
+  // Either way the target has to be inside `passRangeIn`: a throw past the reach lands short of the
+  // partner, so the range is what decides which ROBOTS get to pass across the FIELD at all.
   //   pushMode  off     never shove loose FUEL
   //             passive FUEL that the BUMPER happens to hit gets shoved (physics only)
   //             active  deliberately drive through a pile from the far side to herd it toward our half
@@ -251,6 +266,7 @@ export const SAMPLES = [
     capacity: 65,
     shootRate: 10.0,
     shootAccuracy: 0.92,
+    passRangeIn: 380,
     heightIn: 21.5,
     weightLb: 128,
     climb: { l1: false, l2: false, l3: false, timeSec: 0, attachTimeSec: 0 },
@@ -271,6 +287,7 @@ export const SAMPLES = [
     capacity: 55,
     shootRate: 10.5,
     shootAccuracy: 0.94,
+    passRangeIn: 420,
     heightIn: 22.0, // 27x27in SDS MK5n frame, fits the TRENCH
     weightLb: 130,
     // Source: "climb to Level 1 with ease". §6.5.2 only requires L1 to stop touching the carpet or
@@ -294,6 +311,7 @@ export const SAMPLES = [
     capacity: 45,
     shootRate: 13.0, // measured at 13 BPS in the thread
     shootAccuracy: 0.95,
+    passRangeIn: 520, // the cross-FIELD passer of this set: reaches its own ALLIANCE ZONE from inside theirs
     heightIn: 21.5, // the thread discusses choosing the TRENCH over the BUMP
     weightLb: 124,
     climb: { l1: true, l2: false, l3: false, timeSec: 3, attachTimeSec: 2 }, // L1 = leaving the carpet is enough (§6.5.2)
@@ -314,6 +332,7 @@ export const SAMPLES = [
     capacity: 85, // source: "Extending hopper holds 85+ balls under the trench, 100+ with net over the bump"
     shootRate: 11.0,
     shootAccuracy: 0.93,
+    passRangeIn: 480,
     heightIn: 21.5, // starting configuration has to fit under the TRENCH
     weightLb: 126,
     climb: { l1: false, l2: false, l3: false, timeSec: 0, attachTimeSec: 0 },
@@ -334,6 +353,7 @@ export const SAMPLES = [
     capacity: 55,
     shootRate: 9.5,
     shootAccuracy: 0.9,
+    passRangeIn: 300,
     heightIn: 23.5, // the source stresses smooth traversal of the BUMP
     weightLb: 132,
     climb: { l1: false, l2: false, l3: false, timeSec: 0, attachTimeSec: 0 },
@@ -356,6 +376,7 @@ export const SAMPLES = [
     capacity: 55,
     shootRate: 10.5,
     shootAccuracy: 0.92,
+    passRangeIn: 460,
     heightIn: 22.0,
     weightLb: 128,
     climb: { l1: false, l2: false, l3: false, timeSec: 0, attachTimeSec: 0 },
@@ -374,6 +395,7 @@ export const SAMPLES = [
     capacity: 45,
     shootRate: 8.5,
     shootAccuracy: 0.9,
+    passRangeIn: 300,
     heightIn: 21.5, // fits under a TRENCH (22.25 in clearance, §5.6)
     weightLb: 128,
     climb: { l1: true, l2: true, l3: false, timeSec: 9, attachTimeSec: 2.4 },
@@ -394,6 +416,7 @@ export const SAMPLES = [
     capacity: 32,
     shootRate: 6.0,
     shootAccuracy: 0.78,
+    passRangeIn: 200,
     heightIn: 28.5, // too tall for a TRENCH: must use BUMPS
     weightLb: 134,
     climb: { l1: true, l2: true, l3: true, timeSec: 7, attachTimeSec: 2.0 },
@@ -414,6 +437,7 @@ export const SAMPLES = [
     capacity: 35,
     shootRate: 6.5,
     shootAccuracy: 0.82,
+    passRangeIn: 220,
     heightIn: 22.0,
     weightLb: 120,
     climb: { l1: true, l2: true, l3: true, timeSec: 5.5, attachTimeSec: 1.6 },
@@ -454,6 +478,7 @@ export const SAMPLES = [
     capacity: 16,
     shootRate: 4.5,
     shootAccuracy: 0.62,
+    passRangeIn: 140,
     heightIn: 26,
     weightLb: 112,
     climb: { l1: true, l2: false, l3: false, timeSec: 6, attachTimeSec: 3 }, // rookie team: even L1 is slow
@@ -516,6 +541,9 @@ export function derived(p) {
     // Bearing of the intake mouth measured from the heading. The engine rotates the intake cone by this
     // and, when the ROBOT is driving to collect, turns the car so the mouth leads.
     intakeOffsetDeg: INTAKE_SIDE_OF(p.intakeSide).deg,
+    // Resolved here rather than left on the profile so the engine and the policy read one number that
+    // is always a real reach, whatever the card or a hand-built script profile held.
+    passRangeIn: p.passRangeIn > 0 ? p.passRangeIn : PASS_RANGE_DEFAULT_IN,
     // R107 caps the deployed height at 30 in measured on a flat floor; climbing above the
     // 45 in MID RUNG is therefore a function of the climb mechanism, not of raw height.
     maxClimbLevel: p.climb.l3 ? 3 : p.climb.l2 ? 2 : p.climb.l1 ? 1 : 0,

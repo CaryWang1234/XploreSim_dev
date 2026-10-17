@@ -18,6 +18,7 @@
     "seat": "node scripts/seat.mjs",
     "dark": "node scripts/dark.mjs",
     "gap": "node scripts/gap.mjs",
+    "range": "node scripts/range.mjs",
     "lever": "node scripts/lever.mjs",
     "team": "node scripts/team.mjs",
     "cap": "node scripts/cap.mjs",

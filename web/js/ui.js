@@ -121,8 +121,8 @@ const CROSS_OPTIONS = [
 // settings next to the BUMP/TRENCH one. Both default to the conservative behaviour.
 const PASS_OPTIONS = [
   { v: 'off', t: 'Off' },
-  { v: 'auto', t: 'Careful (teammate on field, big saving)' },
-  { v: 'eager', t: 'Aggressive (throw even with nobody there)' },
+  { v: 'auto', t: 'Careful (teammate in range, big saving)' },
+  { v: 'eager', t: 'Aggressive (throw to your own half, if in range)' },
 ];
 const PUSH_OPTIONS = [
   { v: 'off', t: 'Off' },
@@ -153,7 +153,7 @@ function crossValue(prof) {
   return 'none';
 }
 
-const PRESET_KEYS = ['driveSpeedIps', 'intakeRate', 'capacity', 'shootRate', 'shootAccuracy', 'heightIn', 'turnRateDegPerSec'];
+const PRESET_KEYS = ['driveSpeedIps', 'intakeRate', 'capacity', 'shootRate', 'shootAccuracy', 'passRangeIn', 'heightIn', 'turnRateDegPerSec'];
 
 // A profile counts as a preset only while it still matches one. Matching on `team` alone would
 // keep labelling edited numbers "Chezy", which is exactly the kind of implied
@@ -231,6 +231,7 @@ function renderRoster(side) {
         <label>Capacity FUEL<input data-k="capacity" type="number" step="1" value="${prof.capacity}" /></label>
         <label>Shoot rate FUEL/s<input data-k="shootRate" type="number" step="0.1" value="${prof.shootRate}" /></label>
         <label>Accuracy<input data-k="shootAccuracy" type="number" step="0.01" min="0.1" max="0.99" value="${prof.shootAccuracy}" /></label>
+        <label title="How far a PASS actually carries. The shooter throws with one fixed punch, so a partner further than this is not reached: the FUEL comes down short, on the same line, wherever it lands. The front edges of the two ALLIANCE ZONES are 334 in apart and their middle lines 493 in, so throwing from inside the opponent's zone back to a partner in your own needs about 400-500 in. Nothing to do with a shot at the HUB, which has its own reference distance and accuracy falloff.">Pass range in<input data-k="passRangeIn" type="number" step="10" min="24" max="660" value="${prof.passRangeIn}" /></label>
         <label>Height in<input data-k="heightIn" type="number" step="0.5" min="12" max="30" value="${prof.heightIn}" /></label>
         <label>Crossing
           <select data-k="cross">${CROSS_OPTIONS.map((o) => `<option value="${o.v}" ${o.v === cross ? 'selected' : ''}>${o.t}</option>`).join('')}</select>

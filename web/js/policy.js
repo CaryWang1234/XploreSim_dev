@@ -356,12 +356,18 @@ export function createAI(opts) {
   // ---- PASS targeting. A collector that has crossed the CENTER LINE faces a long trip home; if a
   // partner is already back on our side, throwing the load to them converts that trip into the
   // partner's short one. Passing to somebody standing next to you moves nothing, so the target is
-  // always a partner who is on our own half and has room to take the load. With `allowZone` (the
-  // eager posture) a ROBOT with nobody to throw to aims at its own ALLIANCE ZONE instead: the load
-  // becomes loose FUEL on the half we are about to fight for, which is the play the user asked for.
+  // always a partner who is on our own half, has room to take the load, and is inside this ROBOT's
+  // 射程 (`passRangeIn`) — past that reach the engine lands the FUEL short of where it was aimed, so an
+  // out-of-range partner is a pass that comes down in nobody's hands. Range is what splits the
+  // ALLIANCE: a ROBOT with ~500 in of reach can hand its load from inside the opponent's ALLIANCE ZONE
+  // to a partner in its own, and one with 260 has to drive it home. With `allowZone` (the eager
+  // posture) a ROBOT with nobody to throw to aims at empty ground in its own ALLIANCE ZONE instead, if
+  // that is in range: the load becomes loose FUEL on the half we are about to fight for, which is the
+  // play the user asked for.
   function passTarget(rb, obs, allowZone) {
     const onFarSide = side === 'red' ? rb.x > GEO.centerLineX : rb.x < GEO.centerLineX;
     if (!onFarSide) return null;
+    const range = rb.passRangeIn;
     let best = null;
     let bestScore = -Infinity;
     for (const m of obs.robots) {
@@ -370,9 +376,11 @@ export function createAI(opts) {
       if (!onOurHalf) continue;
       const room = m.capacity - m.carrying;
       if (room <= 0) continue;
+      const dist = Math.hypot(m.x - rb.x, m.y - rb.y);
+      if (dist > range) continue;
       // Nearest partner with room wins: a shorter pass lands tighter (the engine spreads the landing
       // with the length of the pass) and leaves the partner closer to the HUB.
-      const v = room * 0.5 - Math.hypot(m.x - rb.x, m.y - rb.y);
+      const v = room * 0.5 - dist;
       if (v > bestScore) {
         bestScore = v;
         best = { x: m.x, y: m.y };
@@ -383,10 +391,11 @@ export function createAI(opts) {
     // mouth (a pass can never be a disguised scoring shot) and clear of the HUB-exit zone, because a
     // pile that lands inside it invites a G408 foul the moment somebody collects it.
     const dirHome = side === 'red' ? -1 : 1;
-    return {
+    const zone = {
       x: GEO[side].hub.x + dirHome * (FIELD.hub.sizeIn / 2 + GEO.hubExitZoneRadiusIn + 10),
       y: GEO.yc,
     };
+    return Math.hypot(zone.x - rb.x, zone.y - rb.y) <= range ? zone : null;
   }
 
   // ---- Active pushing. The engine's passive shove only rearranges FUEL a ROBOT already ran into;
