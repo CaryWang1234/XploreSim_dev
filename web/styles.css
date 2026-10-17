@@ -280,10 +280,13 @@ body.cinema .field-panel .panel-head,
 .field-panel:fullscreen .panel-head { margin-bottom: 6px; }
 /* The legend is a reading aid for the page, not part of the picture: in Fill or Fullscreen it is a
    wall of text under the FIELD that steals height the replay wants. Drop it and let ui.js letterbox
-   the canvas into what is left. Same for the explanation under the heading - it is the longest
-   paragraph in the panel and it is the first thing a viewer has already read. */
+   the canvas into what is left. Same for the explanation under the heading and the "How to read the
+   picture" details - even collapsed they cost a row, and a viewer who is watching the replay has
+   already read them. */
 body.cinema .field-panel .legend,
 .field-panel:fullscreen .legend,
+body.cinema .field-panel .howto,
+.field-panel:fullscreen .howto,
 body.cinema .field-panel #field-sub,
 .field-panel:fullscreen #field-sub { display: none; }
 body.cinema #field,
