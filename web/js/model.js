@@ -611,11 +611,20 @@ export function defaultScenario() {
     // tempo, so without this every ALLIANCE cycles a fountain and roughly doubles the real score.
     // Verified: the greedy mirror (scripts/mirror.mjs, n=24 x 2 seed sets x both trios) lands on 615.7
     // against the real average of 627, with the red-minus-blue split inside its error bar (-1.3 +- 7.2).
-    // Swept on the current engine: 4.0 -> 598.6, 4.2 -> 615.7, 4.4 -> 614.7, 4.6 -> 622.5. Past 4.2 the
-    // mean stops moving while the mirror develops a side gap (4.4: red-blue -14.8 +- 6.5, 4.6: -21.9 +-
-    // 7.3) that is not yet explained, so the cap stops where the MATCHes still score evenly. 4.0 keeps
-    // both in range too, at 4.5% under the real average; the value was re-derived after the NEUTRAL ZONE
-    // layout was made point-symmetric, which took about 20 points out of every mirror.
+    // Swept on the build before the lanes: 4.0 -> 598.6, 4.2 -> 615.7, 4.4 -> 614.7, 4.6 -> 622.5, and
+    // the sweep stopped at 4.2 because past it the mirror developed a side gap (4.4: red-blue -14.8 +-
+    // 6.5, 4.6: -21.9 +- 7.3) that was not yet explained, so the cap stopped where the MATCHes still
+    // scored evenly. 4.0 kept both in range too, at 4.5% under the real average; the value was re-derived
+    // after the NEUTRAL ZONE layout was made point-symmetric, which took about 20 points out of each.
+    // Re-swept on the build that models the BUMP/TRENCH seam (§5.5/§5.6), same harness, n=192 each:
+    // 4.2 -> 594.7, 4.4 -> 611.6, 4.6 -> 611.2, 4.8 -> 615.5, 5.0 -> 618.5, 5.2 -> 627.0, 5.4 -> 627.8,
+    // 5.6 -> 633.4. Two things changed. The seam takes about 16 points off the whole curve without
+    // touching the cap's leverage, so 5.2 would put the anchor back on the real average. And the side gap
+    // that used to stop the sweep does not reproduce: across those values the red-blue split is -3.4,
+    // -5.3, -11.4, +1.4, -1.5, -9.9, none past 2 sem — what had been making a mirror favour a seat was a
+    // ROBOT sliding sideways across a seam to get home. 4.2 is still what ships, because a calibrated
+    // knob is not free to move: every measured figure on the page is anchored on it, so re-deriving it is
+    // a change in its own right and not something to slip in underneath a rule.
     hubExitRate: 4.2,
     faultsEnabled: true,
     // §7.4.4 G415/G416/G417 (opponent interaction) are off by default. The rules are real, but the one

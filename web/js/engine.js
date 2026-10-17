@@ -36,6 +36,11 @@ const PASS_FLIGHT_SEC = 1.1;
 // nothing for fhub === 3 — and FUEL dropped at a HUB mouth is self-limiting anyway, because loitering
 // there to scoop it up is exactly what G408 fouls.
 const PASS_HUB_CLEARANCE_IN = 40;
+// A HUB is a solid 47 in prism (§5.4) and this model's PASS is a flat throw with no height in its arc,
+// so a HUB standing in the line stops the ball at the face it arrives at, the same way §5.4's net stops
+// a shot launched from a prohibited area. The box is grown by one FUEL radius (§5.10.1: 5.91 in), since
+// what has to miss the structure is a 5.91 in ball and not a point.
+export const PASS_HUB_HALF_IN = FIELD.hub.sizeIn / 2 + FUEL.diameterIn / 2;
 // A ROBOT driving into loose FUEL shoves it along at this fraction of its own ground speed. Like
 // `hubExitRate`, a scenario may override it (sc.bulldoze ?? this) so the effect can be measured
 // against a control with the pushing switched off.
@@ -187,6 +192,34 @@ export function segmentPointDistance(ax, ay, bx, by, px, py) {
   if (len2 <= 1e-9) return Math.hypot(px - ax, py - ay);
   const t = clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0, 1);
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+// Liang-Barsky: where the segment (x0,y0)->(x1,y1) first enters the axis-aligned square centred on
+// (cx,cy) with half-side `half`, as a fraction of the segment, or null if it never touches it. A HUB is
+// a 47 in SQUARE prism (§5.4), so "is a HUB in the line of this throw" has to be a box test: a radius
+// leaves each corner open by ten inches, which is more than half a ROBOT.
+export function segmentBoxEntry(x0, y0, x1, y1, cx, cy, half) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const p = [-dx, dx, -dy, dy];
+  const q = [x0 - (cx - half), cx + half - x0, y0 - (cy - half), cy + half - y0];
+  let t0 = 0;
+  let t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return null;
+      continue;
+    }
+    const r = q[i] / p[i];
+    if (p[i] < 0) {
+      if (r > t1) return null;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return null;
+      if (r < t1) t1 = r;
+    }
+  }
+  return t0;
 }
 
 // ---- square ROBOTs: heading, turning and oriented collision ----
@@ -380,6 +413,40 @@ export const GEO = (() => {
   };
 })();
 
+// §5.5 and §5.6 make a BUMP and a TRENCH neighbours, not alternates: "The TRENCH extends from the
+// guardrail to the BUMP on both sides of the FIELD", so across the width the FIELD reads guardrail →
+// TRENCH (65.65 in) → BUMP (73 in) → HUB (47 in) → BUMP → TRENCH → guardrail, and the two lanes meet at
+// one seam. They are different structures at different heights — a 6.513 in ramp a ROBOT drives OVER and
+// a 40.25 in arm with 22.25 in of clearance a ROBOT drives UNDER — and there is no drivable path from the
+// top of a BUMP sideways onto or under a TRENCH. So a ROBOT whose centre is inside the band stays in the
+// lane it came in through; to change lanes it has to leave the band, move along the carpet, and cross
+// again somewhere else. The manual states no clause here — this is the geometry, and the engine enforces
+// it as a wall rather than as a foul. `sc.seamLock` switches it off so the cost can be measured.
+export const BUMP_TRENCH_SEAM_IN = FIELD.trench.widthIn;
+
+// Which band (if any) this x is inside. Both alliances' bands count: the structures are on the FIELD
+// twice and a ROBOT has to obey them wherever it is standing.
+export function bandAtX(x) {
+  for (const side of ['red', 'blue']) {
+    const b = GEO[side].band;
+    if (x >= b[0] && x <= b[1]) return side;
+  }
+  return null;
+}
+
+// 0 = the guardrail TRENCH lane, 2 = the other one, 1 = the two BUMPs and the HUB between them.
+export function bandRegionOf(y) {
+  if (y < BUMP_TRENCH_SEAM_IN) return 0;
+  if (y > GEO.W - BUMP_TRENCH_SEAM_IN) return 2;
+  return 1;
+}
+
+export function clampToBandRegion(y, region) {
+  if (region === 0) return Math.min(y, BUMP_TRENCH_SEAM_IN);
+  if (region === 2) return Math.max(y, GEO.W - BUMP_TRENCH_SEAM_IN);
+  return clamp(y, BUMP_TRENCH_SEAM_IN, GEO.W - BUMP_TRENCH_SEAM_IN);
+}
+
 export function simulateMatch(opts) {
   const { redAlliance, blueAlliance, redPolicy, bluePolicy, scenario, record = false } = opts;
   const sc = scenario;
@@ -414,11 +481,6 @@ export function simulateMatch(opts) {
   // landing point instead of a hub index.
   const fpx = new Float32Array(total);
   const fpy = new Float32Array(total);
-  // Where a FUEL in flight was launched from, and who launched it. The replay draws ONE line per
-  // shooting ROBOT through the launch points of the balls it has in the air, so a turret firing on the
-  // move traces the curve its own path drew instead of a fan of separate dashed spokes to the HUB.
-  const fox = new Float32Array(total);
-  const foy = new Float32Array(total);
   // FUEL that just bounced off a defender cannot be re-ingested until it has settled, or a ROBOT
   // parked against one would shoot, swallow, and shoot the same ball on a loop that no real driver
   // would keep feeding.
@@ -777,18 +839,46 @@ export function simulateMatch(opts) {
     return { x: c.x + (side === 'red' ? 1 : -1) * (c.w / 2 + 14), y: c.y };
   };
 
+  // Which band a move runs into: either alliance's, because the structures are on the FIELD twice and a
+  // ROBOT has to obey the one it is standing in. Null when the straight line never enters one. A ROBOT
+  // already inside a band is "on the path" with zero gap, so the nearer band wins.
+  function bandForMove(rb, tx) {
+    let best = null;
+    let bestGap = Infinity;
+    for (const side of ['red', 'blue']) {
+      const b = GEO[side].band;
+      if (Math.max(rb.x, tx) < b[0] || Math.min(rb.x, tx) > b[1]) continue;
+      const gap = rb.x >= b[0] && rb.x <= b[1] ? 0 : Math.min(Math.abs(rb.x - b[0]), Math.abs(rb.x - b[1]));
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = { side, band: b };
+      }
+    }
+    return best;
+  }
+
   // Route movement through a legal corridor when a ROBOT has to cross the BUMP/TRENCH band.
   // The corridor choice is committed until the crossing is done: re-deciding it every tick makes
   // a ROBOT dither in Y whenever its goal moves, because candidate corridors sit far apart in Y.
   function navTarget(rb, tx, ty) {
-    const band = GEO[rb.alliance].band;
-    const outside = rb.x < band[0] || rb.x > band[1];
-    const crossing = (rb.x < band[0] && tx > band[1]) || (rb.x > band[1] && tx < band[0]);
-    if (!crossing) {
+    const seamOn = sc.seamLock !== false;
+    const own = GEO[rb.alliance].band;
+    // With the seam locked, entering a band at all is a lane decision, so the route is planned against
+    // the band the move runs into. With it switched off this is the older, narrower model, kept intact
+    // so the control arm measures the rule and nothing else: only a ROBOT crossing its OWN band end to
+    // end is routed through a corridor.
+    const m = seamOn
+      ? bandForMove(rb, tx)
+      : (rb.x < own[0] && tx > own[1]) || (rb.x > own[1] && tx < own[0])
+        ? { side: rb.alliance, band: own }
+        : null;
+    if (!m) {
       rb.navCorridor = null;
       return { x: tx, y: ty };
     }
-    const cors = usableCorridors(rb.alliance, rb);
+    const band = m.band;
+    const outside = rb.x < band[0] || rb.x > band[1];
+    const cors = usableCorridors(m.side, rb);
     // A ROBOT built so it can clear neither a BUMP nor a TRENCH is confined to its own side of the
     // band; holding it at the band edge is the honest outcome, and it keeps the loop below from
     // dereferencing an empty corridor list.
@@ -796,12 +886,27 @@ export function simulateMatch(opts) {
       rb.navCorridor = null;
       return { x: outside ? (rb.x < band[0] ? band[0] - 4 : band[1] + 4) : tx, y: ty };
     }
+    // A BUMP lane and a TRENCH lane meet at a seam that is not a doorway (§5.5/§5.6), so the lane worth
+    // entering is chosen by the LANE the goal stands in: a ROBOT that ends up in the TRENCH lane on the
+    // far side comes in through a TRENCH, not through a BUMP it then cannot leave sideways. When no lane
+    // it can use opens onto the goal's lane, it crosses at the nearest one and moves along the open
+    // carpet beyond it. With the seam unlocked the goal's lane is not a constraint, so neither is this.
+    const want = bandRegionOf(ty);
+    let pool = cors;
+    if (seamOn) {
+      const inWant = cors.filter((c) => bandRegionOf(c.y) === want);
+      if (inWant.length) pool = inWant;
+    }
     let best = null;
+    // Hysteresis first, and against every usable lane rather than only the preferred one: a goal's y
+    // crosses a seam constantly as it moves, and re-picking the lane each time that happens would have a
+    // ROBOT abandon a crossing it is already halfway through. A committed lane is dropped when the ROBOT
+    // is clear of the band, not when its target shifts.
     if (rb.navCorridor != null) best = cors.find((c) => c.y === rb.navCorridor) || null;
     if (!best) {
-      best = cors[0];
+      best = pool[0];
       let bestCost = Infinity;
-      for (const c of cors) {
+      for (const c of pool) {
         const cost = Math.abs(rb.y - c.y) + 0.6 * Math.abs(ty - c.y) + (c.kind === 'trench' ? 0 : 5);
         if (cost < bestCost) {
           bestCost = cost;
@@ -809,6 +914,17 @@ export function simulateMatch(opts) {
         }
       }
       rb.navCorridor = best.y;
+    }
+    // Already inside, and the goal is in another lane: the seam is a structure, so the lane change has to
+    // happen in the carpet, not here. If the goal is PAST the band the ROBOT finishes the crossing it is
+    // already in the middle of and changes lanes on the far side; if the goal is in the band itself, the
+    // only legal move is back out the way it came in.
+    const lock = rb.bandLock;
+    if (seamOn && !outside && lock && lock.side === m.side && lock.region !== want) {
+      rb.navCorridor = null;
+      if (tx > band[1]) return { x: band[1] + 8, y: rb.y };
+      if (tx < band[0]) return { x: band[0] - 8, y: rb.y };
+      return { x: rb.x - band[0] < band[1] - rb.x ? band[0] - 8 : band[1] + 8, y: rb.y };
     }
     if (outside && Math.abs(rb.y - best.y) > 7) return { x: rb.x, y: best.y };
     if (outside) return { x: rb.x < band[0] ? band[1] + 4 : band[0] - 4, y: best.y };
@@ -1129,8 +1245,12 @@ export function simulateMatch(opts) {
         fscore[i] = rng() < acc ? 1 : 0;
         fvx[i] = (hub.x - rb.x) / 0.55;
         fvy[i] = (hub.y - rb.y) / 0.55;
-        fox[i] = rb.x;
-        foy[i] = rb.y;
+        // The flight integrates from `fx/fy`, and a FUEL that was carried for at least one tick already
+        // sits there. One that came down the hopper and was launched inside the same tick does not: it
+        // would still be at the array's zero and fly from the corner of the FIELD instead of from the
+        // ROBOT, crossing structures it never should. A launch therefore fixes its start to the ROBOT.
+        fx[i] = rb.x;
+        fy[i] = rb.y;
         // The gate in fireAtHub refuses an out-of-zone launch, so this can only be non-zero if the gate
         // and the net backstop are both gone. Counting it anyway is what makes the §5.4 check in
         // scripts/verify.mjs a statement about where shots are launched from rather than about how many
@@ -1231,14 +1351,39 @@ export function simulateMatch(opts) {
   // impede their TOWER access) and G405 (never intentionally eject a SCORING ELEMENT from the FIELD).
   // Both are satisfied by construction here: targets are our own half or our own ALLIANCE ZONE, never
   // an opponent, and the landing is clamped inside the FIELD. A caller that aims too close to a HUB is
-  // refused as well, so a pass can never become a disguised scoring shot.
-  //
-  // 射程 is what limits the throw. `rb.passRangeIn` is how far the shooter's one fixed punch carries,
-  // so an aim point past it is not reached: the FUEL leaves on the same line and comes down `passRangeIn`
-  // out, short of the partner, as loose FUEL on whoever's carpet it landed on. That is the whole content
-  // of "only some ROBOTS can pass from their opponent's ALLIANCE ZONE to their own" — the zones' front
-  // edges are 334 in apart and their middle lines 493 in (§5.2/§5.3), so the play needs the reach, and
-  // a ROBOT without it has to drive home or find a partner who is nearer.
+  // refused as well, so a pass can never become a disguised scoring shot, and the HUB itself stops any
+  // throw whose line runs through it (see passStop).
+
+  // Where a PASS aimed at (tx, ty) actually comes down if a HUB stands in the line. Detection uses the
+  // footprint grown by one FUEL radius (PASS_HUB_HALF_IN), because what has to miss the structure is a
+  // 5.91 in ball and not a point; the stop point is then pulled back out of the true footprint by at
+  // least that radius, so the ball's centre ends clear of the wall it hit. Null when the line is clear.
+  function passStop(rb, tx, ty) {
+    const vx = tx - rb.x;
+    const vy = ty - rb.y;
+    const len = Math.hypot(vx, vy);
+    if (len <= 0) return null;
+    const face = FIELD.hub.sizeIn / 2;
+    const ball = PASS_HUB_HALF_IN - face;
+    let best = null;
+    let bestAt = Infinity;
+    for (const side of ['red', 'blue']) {
+      const h = GEO[side].hub;
+      const grazed = segmentBoxEntry(rb.x, rb.y, tx, ty, h.x, h.y, PASS_HUB_HALF_IN);
+      if (grazed === null) continue;
+      // Where the centre would reach the wall itself. A line that only clips the corner — the ball's
+      // body hits, the centre does not — is stopped at the same stand-off, because a 5.91 in ball
+      // cannot pass a three-inch gap.
+      const hit = segmentBoxEntry(rb.x, rb.y, tx, ty, h.x, h.y, face);
+      const back = Math.max(0, (hit === null ? grazed : hit) * len - (ball + rng.range(NET_DROP_NEAR_IN, NET_DROP_FAR_IN)));
+      if (back < bestAt) {
+        bestAt = back;
+        best = { x: rb.x + (vx / len) * back, y: rb.y + (vy / len) * back };
+      }
+    }
+    return best;
+  }
+
   function releasePass(rb, tgt) {
     if (!tgt) return -1;
     const hub = GEO[rb.alliance].hub;
@@ -1248,12 +1393,26 @@ export function simulateMatch(opts) {
     if (d <= 0) return -1;
     const range = rb.passRangeIn;
     const k = Math.min(1, range / d);
-    const ax = rb.x + dx * k;
-    const ay = rb.y + dy * k;
-    // Clearance is tested on where the FUEL actually comes down, not on where it was aimed: a throw
-    // that falls short of a HUB-side target still lands at the HUB, and that is a scoring shot in
-    // everything but the label.
+    let ax = rb.x + dx * k;
+    let ay = rb.y + dy * k;
+    // Clearance is tested on where the FUEL was aimed, not on where a stopped throw ends up: a PASS
+    // cannot score by construction, and a ball the HUB stops simply comes down at its base, which is
+    // where a missed shot comes down too.
     if (Math.hypot(ax - hub.x, ay - hub.y) < PASS_HUB_CLEARANCE_IN) return -1;
+    // 射程 is what limits the throw. `rb.passRangeIn` is how far the shooter's one fixed punch carries,
+    // so an aim point past it is not reached: the FUEL leaves on the same line and comes down
+    // `passRangeIn` out, short of the partner, as loose FUEL on whoever's carpet it landed on. That is
+    // the whole content of "only some ROBOTS can pass from their opponent's ALLIANCE ZONE to their
+    // own" — the zones' front edges are 334 in apart and their middle lines 493 in (§5.2/§5.3), so the
+    // play needs the reach, and a ROBOT without it has to drive home or find a partner who is nearer.
+    // The HUB then limits it a second way: a throw at a teammate standing behind one never gets there.
+    const stop = passStop(rb, ax, ay);
+    if (stop) {
+      ax = stop.x;
+      ay = stop.y;
+    }
+    const ex = ax - rb.x;
+    const ey = ay - rb.y;
     for (let i = 0; i < total; i++) {
       if (fstate[i] === 3 && fholder[i] === rb.idx) {
         fstate[i] = 4;
@@ -1263,10 +1422,10 @@ export function simulateMatch(opts) {
         fpx[i] = ax;
         fpy[i] = ay;
         ftimer[i] = PASS_FLIGHT_SEC;
-        fvx[i] = dx * k / PASS_FLIGHT_SEC;
-        fvy[i] = dy * k / PASS_FLIGHT_SEC;
-        fox[i] = rb.x;
-        foy[i] = rb.y;
+        fvx[i] = ex / PASS_FLIGHT_SEC;
+        fvy[i] = ey / PASS_FLIGHT_SEC;
+        fx[i] = rb.x;
+        fy[i] = rb.y;
         rb.carrying -= 1;
         flights.add(i);
         return i;
@@ -2212,6 +2371,22 @@ export function simulateMatch(opts) {
       if (rb.canBump || rb.canTrench) continue;
       const band = GEO[rb.alliance].band;
       rb.x = rb.alliance === 'red' ? Math.min(rb.x, band[0] - 4) : Math.max(rb.x, band[1] + 4);
+    }
+
+    // The BUMP/TRENCH seam (§5.5/§5.6). A ROBOT whose centre is inside a band keeps the lane it came in
+    // through: the seam between a BUMP and a TRENCH is where two different structures meet, not a
+    // doorway, so sliding sideways from the top of a ramp onto the approach of an arm is not a move this
+    // FIELD offers. navTarget plans around it; this is the same constraint on the POSITION, because a
+    // shove moves a ROBOT as a side effect of resolving another one, and because a ROBOT can be pushed in
+    // through a lane it never chose.
+    for (const rb of robots) {
+      const side = sc.seamLock === false ? null : bandAtX(rb.x);
+      if (!side) {
+        rb.bandLock = null;
+        continue;
+      }
+      if (!rb.bandLock || rb.bandLock.side !== side) rb.bandLock = { side, region: bandRegionOf(rb.y) };
+      rb.y = clampToBandRegion(rb.y, rb.bandLock.region);
     }
 
     // ---- HUMAN PLAYER actions (§6.1, §5.9.2) ----

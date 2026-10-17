@@ -53,6 +53,10 @@ const PHYS = {
   // behaviour; 0 would still be a perfectly inelastic hit.
   noRestitution: { contactRestitution: -1 },
   noFaceGate: { dumperFaceTolDeg: 180 },
+  // Restores the model where a ROBOT could slide sideways between a BUMP lane and a TRENCH lane while
+  // its centre was still inside the band, and where only an end-to-end crossing of its OWN band was
+  // routed through a corridor at all. That is the control for §5.5/§5.6's seam being a structure.
+  noSeamLock: { seamLock: false },
   physAllOff: { turretOpportunityMarginIn: 0, contactRestitution: -1, dumperFaceTolDeg: 180 },
 };
 const ARMS = {

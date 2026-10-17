@@ -6,7 +6,7 @@
 //                    isolation, G420 TOWER protection window).
 
 import { TIME, POINTS, FIELD, hubActiveTable } from './rules.js';
-import { GEO, INTENT, segmentPointDistance, SHOT_BLOCK_RADIUS_IN } from './engine.js';
+import { GEO, INTENT, PASS_HUB_HALF_IN, segmentBoxEntry, segmentPointDistance, SHOT_BLOCK_RADIUS_IN } from './engine.js';
 import {
   ROLE,
   periodSeconds,
@@ -363,11 +363,18 @@ export function createAI(opts) {
   // to a partner in its own, and one with 260 has to drive it home. With nobody home to take it, the
   // aim point becomes empty ground in our own ALLIANCE ZONE instead — both postures may do this, and
   // they differ in how full the hopper has to be and how big a saving the throw has to be, not in
-  // which targets are on the menu.
+  // which targets are on the menu. Third gate on top of both: the line to the target may not run
+  // through a HUB, because the engine stops such a throw at the near face.
   function passTarget(rb, obs) {
     const onFarSide = side === 'red' ? rb.x > GEO.centerLineX : rb.x < GEO.centerLineX;
     if (!onFarSide) return null;
     const range = rb.passRangeIn;
+    // A PASS is a flat throw in this model, so a HUB standing in the line stops it at the near face
+    // (engine.js passStop). An aim across one is a throw the partner cannot receive, so it is not a
+    // target at all — which is what the HUB's own net is for.
+    const clearsHubs = (t) =>
+      segmentBoxEntry(rb.x, rb.y, t.x, t.y, GEO.red.hub.x, GEO.red.hub.y, PASS_HUB_HALF_IN) === null &&
+      segmentBoxEntry(rb.x, rb.y, t.x, t.y, GEO.blue.hub.x, GEO.blue.hub.y, PASS_HUB_HALF_IN) === null;
     let best = null;
     let bestScore = -Infinity;
     for (const m of obs.robots) {
@@ -378,6 +385,7 @@ export function createAI(opts) {
       if (room <= 0) continue;
       const dist = Math.hypot(m.x - rb.x, m.y - rb.y);
       if (dist > range) continue;
+      if (!clearsHubs(m)) continue;
       // Nearest partner with room wins: a shorter pass lands tighter (the engine spreads the landing
       // with the length of the pass) and leaves the partner closer to the HUB.
       const v = room * 0.5 - dist;
@@ -391,11 +399,17 @@ export function createAI(opts) {
     // mouth (a pass can never be a disguised scoring shot) and clear of the HUB-exit zone, because a
     // pile that lands inside it invites a G408 foul the moment somebody collects it.
     const dirHome = side === 'red' ? -1 : 1;
-    const zone = {
-      x: GEO[side].hub.x + dirHome * (FIELD.hub.sizeIn / 2 + GEO.hubExitZoneRadiusIn + 10),
-      y: GEO.yc,
-    };
-    return Math.hypot(zone.x - rb.x, zone.y - rb.y) <= range ? zone : null;
+    const zx = GEO[side].hub.x + dirHome * (FIELD.hub.sizeIn / 2 + GEO.hubExitZoneRadiusIn + 10);
+    // Straight down the HUB axis is the one line its own net stops, so walk the landing off the axis
+    // and take the nearest row the throw can actually clear: still our own zone, still out of the
+    // outlet, but no longer aimed through a wall.
+    for (const dy of [0, 70, -70, 110, -110]) {
+      const y = GEO.yc + dy;
+      if (y < 24 || y > GEO.W - 24) continue;
+      const zone = { x: zx, y };
+      if (Math.hypot(zone.x - rb.x, zone.y - rb.y) <= range && clearsHubs(zone)) return zone;
+    }
+    return null;
   }
 
   // ---- Active pushing. The engine's passive shove only rearranges FUEL a ROBOT already ran into;

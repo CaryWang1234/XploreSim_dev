@@ -282,13 +282,19 @@ body.cinema .field-panel .panel-head,
    wall of text under the FIELD that steals height the replay wants. Drop it and let ui.js letterbox
    the canvas into what is left. Same for the explanation under the heading and the "How to read the
    picture" details - even collapsed they cost a row, and a viewer who is watching the replay has
-   already read them. */
+   already read them. And the same for the two bars directly under the FIELD: the SHIFT strip and the
+   AUTO line are both things you read when deciding what to do, not while watching a MATCH play, and
+   the strip's seven segments are where a phone viewer loses a whole row of FIELD. */
 body.cinema .field-panel .legend,
 .field-panel:fullscreen .legend,
 body.cinema .field-panel .howto,
 .field-panel:fullscreen .howto,
 body.cinema .field-panel #field-sub,
-.field-panel:fullscreen #field-sub { display: none; }
+.field-panel:fullscreen #field-sub,
+body.cinema .field-panel #period-strip,
+.field-panel:fullscreen #period-strip,
+body.cinema .field-panel #auto-note,
+.field-panel:fullscreen #auto-note { display: none; }
 body.cinema #field,
 .field-panel:fullscreen #field { border-radius: 8px; }
 

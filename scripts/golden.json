@@ -6,75 +6,75 @@
       "name": "greedy-mirror",
       "note": "hand-written cycling plan on both sides, no defence, faults on",
       "seed": 20260110,
-      "full": 3998900194,
+      "full": 2424428077,
       "cuts": [
-        2512393849,
-        1463656915,
-        2979198792,
-        1682020905,
-        3998900194
+        2826248109,
+        23942214,
+        2582466153,
+        3619256275,
+        2424428077
       ],
       "total": {
-        "red": 622,
-        "blue": 704
+        "red": 530,
+        "blue": 532
       },
       "fuel": {
-        "red": 602,
-        "blue": 684
+        "red": 510,
+        "blue": 512
       },
       "frames": 1601,
-      "scored": 1230,
-      "collected": 1352,
+      "scored": 968,
+      "collected": 1154,
       "fouls": 0
     },
     {
       "name": "pinned-score-contact",
       "note": "every ROBOT held on SCORE, §7.4.4 hard contact on, so the foul path is in the digest",
       "seed": 90001,
-      "full": 3354180423,
+      "full": 756783031,
       "cuts": [
-        2626897592,
-        4291579710,
-        2177338547,
-        2876576494,
-        3354180423
+        3506891320,
+        4054673685,
+        3850114406,
+        2524075448,
+        756783031
       ],
       "total": {
-        "red": 610,
-        "blue": 642
+        "red": 604,
+        "blue": 641
       },
       "fuel": {
-        "red": 590,
-        "blue": 622
+        "red": 584,
+        "blue": 591
       },
       "frames": 1601,
-      "scored": 1165,
-      "collected": 1428,
-      "fouls": 0
+      "scored": 1125,
+      "collected": 1294,
+      "fouls": 2
     },
     {
       "name": "ai-vs-greedy",
       "note": "the shipped search on red, greedy on blue: MCTS, opponent model and the whole intent ladder",
       "seed": 700001,
-      "full": 3638172970,
+      "full": 2422752456,
       "cuts": [
-        73384132,
-        1914339595,
-        2683445695,
-        2311397227,
-        3638172970
+        2702241393,
+        3853631768,
+        3358442941,
+        3787520965,
+        2422752456
       ],
       "total": {
-        "red": 564,
-        "blue": 542
+        "red": 556,
+        "blue": 536
       },
       "fuel": {
-        "red": 544,
-        "blue": 522
+        "red": 536,
+        "blue": 526
       },
       "frames": 1601,
-      "scored": 1027,
-      "collected": 1283,
+      "scored": 1026,
+      "collected": 1249,
       "fouls": 0
     }
   ]

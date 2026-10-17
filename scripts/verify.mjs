@@ -4,7 +4,7 @@
 
 import { TIME, POINTS, FUEL, FIELD } from '../web/js/rules.js';
 import { defaultScenario, makeAlliance, makeRobot, SAMPLES, periodAt } from '../web/js/model.js';
-import { simulateMatch, INTENT, GEO, CONTACT_UNABLE_SEVERITY } from '../web/js/engine.js';
+import { simulateMatch, INTENT, GEO, CONTACT_UNABLE_SEVERITY, segmentBoxEntry, bandAtX, bandRegionOf, BUMP_TRENCH_SEAM_IN } from '../web/js/engine.js';
 
 // Reference policy for engine validation: a plain greedy state machine with sticky behaviour
 // (no dithering) so the engine is exercised, not the policy. Deliberately ignores HUB windows
@@ -451,6 +451,218 @@ function netChecks(seed) {
   console.log(`  aimed outside the ALLIANCE ZONE  scored ${out.scored}  wasted ${out.wasted}  launched out of zone ${out.outOfZoneShots}`);
 }
 
+// §5.4's net, seen from the PASS side. A throw is a flat, straight flight in this model, so a HUB
+// standing in its line stops it at the near face: a policy that aims through the structure cannot put
+// a ball through it. The test policy fills up inside its own ALLIANCE ZONE and then throws straight
+// down the FIELD at the far wall — and both HUBs sit on that centre line, so EVERY throw in the test
+// is aimed through two walls. A flight is a straight line at constant velocity, so the segment from
+// where a ball left the ROBOT to where it came down IS its path: if that segment enters no HUB
+// footprint, no ball crossed one.
+//
+// Two controls make that a statement about the net rather than about an empty test. First, each PASS is
+// also measured against where it was AIMED: the count of throws whose aim line crossed a HUB must be
+// well above zero, or the engine would be refusing a throw nobody attempted. Second, the same MATCH told
+// to shoot instead of throw does put FUEL into its own HUB, so the walk is not blind.
+const PASS_TEST_FAR = (side) => ({ x: side === 'red' ? GEO.L - 10 : 10, y: GEO.yc });
+
+function passHubWalk(res) {
+  // The footprint is shrunk by 2 in because frame positions are stored as integers; a real fly-through
+  // is tens of inches inside, so the shrink cannot hide one but does refuse a mere graze of the face.
+  const half = FIELD.hub.sizeIn / 2 - 2;
+  const edge = FIELD.hub.sizeIn / 2;
+  const hubs = [GEO.red.hub, GEO.blue.hub];
+  const last = new Map();
+  const origin = new Map();
+  let passSeen = 0;
+  let shotSeen = 0;
+  let passAimedThrough = 0;
+  let passCross = 0;
+  let shotCross = 0;
+  let restInside = 0;
+  for (const f of res.timeline) {
+    const now = new Map();
+    for (const b of f.fuel) now.set(b[0], b);
+    const sideOf = new Map();
+    for (const r of f.r) sideOf.set(r.i, r.a);
+    for (const [id, b] of now) {
+      const p = last.get(id);
+      if (b[3] === 4 && (!p || p[3] !== 4)) {
+        const pass = b[4] === 3;
+        // Element 6 is the launcher's index, which is whose aim line this flight is.
+        const side = sideOf.get(b[6]);
+        origin.set(id, { x: b[1], y: b[2], pass, aimed: pass && side ? PASS_TEST_FAR(side) : null });
+        if (pass) passSeen += 1;
+        else shotSeen += 1;
+      }
+      if (p && p[3] === 4 && b[3] !== 4) {
+        const o = origin.get(id);
+        origin.delete(id);
+        if (!o) continue;
+        const crossed = hubs.some((h) => segmentBoxEntry(o.x, o.y, b[1], b[2], h.x, h.y, half) !== null);
+        if (o.pass) {
+          if (o.aimed && hubs.some((h) => segmentBoxEntry(o.x, o.y, o.aimed.x, o.aimed.y, h.x, h.y, half) !== null)) {
+            passAimedThrough += 1;
+          }
+          if (crossed) passCross += 1;
+          if (hubs.some((h) => Math.abs(b[1] - h.x) <= edge && Math.abs(b[2] - h.y) <= edge)) restInside += 1;
+        } else if (crossed) shotCross += 1;
+      }
+    }
+    last.clear();
+    for (const [id, b] of now) last.set(id, b);
+  }
+  return { passSeen, shotSeen, passAimedThrough, passCross, shotCross, restInside };
+}
+
+function passHubRun(seed, shoot) {
+  const far = PASS_TEST_FAR;
+  const mk = (side) => {
+    const zone = GEO[side].allianceZone;
+    // The shooting arm has to fire from inside its own ALLIANCE ZONE or G407 refuses the launch, so it
+    // picks up the nearest FUEL on its own half and ignores the rest of the FIELD.
+    const find = (rb, obs, onlyZone) => {
+      let best = null;
+      let bestD = Infinity;
+      for (let i = 0; i < obs.fuel.total; i += 2) {
+        if (obs.fuel.state[i] !== 0) continue;
+        if (onlyZone && obs.fuel.x[i] < zone[0] - 20) continue;
+        if (onlyZone && obs.fuel.x[i] > zone[1] + 20) continue;
+        const d = (obs.fuel.x[i] - rb.x) ** 2 + (obs.fuel.y[i] - rb.y) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = { x: obs.fuel.x[i], y: obs.fuel.y[i] };
+        }
+      }
+      return best;
+    };
+    return {
+      reset() {},
+      onPeriodStart() {},
+      decide(rb, obs) {
+        if (rb.carrying > 0) {
+          return shoot ? { mode: INTENT.SCORE } : { mode: INTENT.PASS, target: far(side) };
+        }
+        const t = (shoot ? find(rb, obs, true) || find(rb, obs, false) : find(rb, obs, false));
+        return t ? { mode: INTENT.COLLECT, target: t } : { mode: INTENT.STOCKPILE, target: GEO[side].shoot };
+      },
+      human: () => 'HOLD',
+    };
+  };
+  const prof = SAMPLES.slice(0, 3);
+  return simulateMatch({
+    redAlliance: makeAlliance(prof, 'red'),
+    blueAlliance: makeAlliance(prof, 'blue'),
+    redPolicy: mk('red'),
+    bluePolicy: mk('blue'),
+    scenario: { ...defaultScenario(), seed, autoWinner: 'auto' },
+    record: true,
+  });
+}
+
+function passHubChecks(seed) {
+  const thrown = passHubWalk(passHubRun(seed, false));
+  const fired = passHubWalk(passHubRun(seed, true));
+  if (thrown.passSeen < 20) {
+    throw new Error(`the PASS check only saw ${thrown.passSeen} PASSes thrown, so it is not exercising the throw path`);
+  }
+  if (thrown.passAimedThrough < thrown.passSeen * 0.5) {
+    throw new Error(`the PASS check aimed only ${thrown.passAimedThrough} of ${thrown.passSeen} throws through a HUB, so most of its "0 crossings" are throws that never tested the net`);
+  }
+  if (fired.shotCross <= 0) {
+    throw new Error(`the control arm had ${fired.shotSeen} shots and none of them registered as a HUB crossing (${fired.shotCross}), so the detector is blind and the PASS result below means nothing`);
+  }
+  if (thrown.passCross > 0 || thrown.restInside > 0) {
+    throw new Error(`§5.4 net: ${thrown.passCross} of ${thrown.passSeen} PASSes flew through a HUB and ${thrown.restInside} came to rest inside one`);
+  }
+  console.log('--- §5.4 net seen from a PASS (aimed straight through both HUBs) ---');
+  console.log(`  PASSes thrown ${thrown.passSeen}  aimed through a HUB ${thrown.passAimedThrough}  flew through one ${thrown.passCross}  came to rest inside one ${thrown.restInside}`);
+  console.log(`  control: ${fired.shotSeen} shots fired at their own HUB, ${fired.shotCross} of them registered as a HUB crossing, so the walk is not blind`);
+}
+
+// §5.5/§5.6 from the driving side. A BUMP lane and a TRENCH lane meet at a seam, and that seam is where
+// two structures of different heights come together, not a doorway: a ROBOT inside the band stays in the
+// lane it entered through. The probe parks every ROBOT inside its own band and then keeps ordering it
+// sideways into the OTHER lane, which is the one move the geometry forbids, and walks the recorded frames
+// twice: once with the rule shipped, once with sc.seamLock switched off. A crossing is two consecutive
+// frames whose centres are both inside the same band with a seam between their y values. The second run is
+// the control - if the probe cannot cross with the rule off, it never tested the rule, and "0 crossings"
+// above would mean nothing.
+function seamProbe(side) {
+  const band = GEO[side].band;
+  const bump = GEO[side].corridors.find((c) => c.kind === 'bump').y;
+  const trench = GEO[side].corridors.find((c) => c.kind === 'trench').y;
+  return {
+    reset() {},
+    onPeriodStart() {},
+    decide(rb) {
+      const inBand = rb.x >= band[0] && rb.x <= band[1];
+      if (!inBand) return { mode: INTENT.COLLECT, target: { x: (band[0] + band[1]) / 2, y: bump } };
+      return { mode: INTENT.COLLECT, target: { x: rb.x, y: rb.y < BUMP_TRENCH_SEAM_IN ? bump : trench } };
+    },
+    human: () => 'HOLD',
+  };
+}
+
+function seamRun(seed, seamLock) {
+  const prof = SAMPLES.slice(0, 3);
+  return simulateMatch({
+    redAlliance: makeAlliance(prof, 'red'),
+    blueAlliance: makeAlliance(prof, 'blue'),
+    redPolicy: seamProbe('red'),
+    bluePolicy: seamProbe('blue'),
+    scenario: { ...defaultScenario(), seed, autoWinner: 'auto', seamLock },
+    record: true,
+  });
+}
+
+function seamWalk(res) {
+  // Frame positions are quantised, a ROBOT pinned against the seam jitters by a fraction of an inch, and
+  // a centre sitting exactly on the band's edge can round to either side of it. A crossing therefore has
+  // to be a move with real margin: both centres at least MARGIN in inside the SAME band, and the two y
+  // values at least MARGIN in past the seam. A genuine sideways lane change is 30 in of margin in both,
+  // so this cannot hide one - and the control run below is what proves that.
+  const margin = 2;
+  const prev = new Map();
+  let attempts = 0;
+  let crossings = 0;
+  for (const f of res.timeline) {
+    for (const r of f.r) {
+      if (r.d) continue;
+      const side = bandAtX(r.x);
+      if (side && bandRegionOf(r.y) !== (r.y < BUMP_TRENCH_SEAM_IN ? 1 : 0)) attempts += 1;
+      const p = prev.get(r.i);
+      prev.set(r.i, r);
+      if (!p) continue;
+      const ps = bandAtX(p.x);
+      if (!ps || bandAtX(r.x) !== ps) continue;
+      const band = GEO[ps].band;
+      if (p.x < band[0] + margin || p.x > band[1] - margin) continue;
+      if (r.x < band[0] + margin || r.x > band[1] - margin) continue;
+      const lo = Math.min(p.y, r.y);
+      const hi = Math.max(p.y, r.y);
+      if ([BUMP_TRENCH_SEAM_IN, GEO.W - BUMP_TRENCH_SEAM_IN].some((s) => lo < s - margin && hi > s + margin)) crossings += 1;
+    }
+  }
+  return { attempts, crossings };
+}
+
+function seamChecks(seed) {
+  const locked = seamWalk(seamRun(seed, true));
+  const open = seamWalk(seamRun(seed, false));
+  if (locked.attempts < 200) {
+    throw new Error(`the seam probe only ordered ${locked.attempts} in-band lane changes, so it is not exercising the sideways move`);
+  }
+  if (open.crossings === 0) {
+    throw new Error(`the control run crossed a seam ${open.crossings} times with the rule switched off, so the walk cannot see the move it is checking for`);
+  }
+  if (locked.crossings > 0) {
+    throw new Error(`§5.5/§5.6 seam: ${locked.crossings} of ${locked.attempts} lane orders carried a ROBOT sideways across a BUMP/TRENCH seam`);
+  }
+  console.log('--- §5.5/§5.6 BUMP/TRENCH seam (ROBOTs ordered sideways from inside the band) ---');
+  console.log(`  lane orders issued inside a band ${locked.attempts}  centres carried across the seam ${locked.crossings}`);
+  console.log(`  control, rule off: ${open.crossings} crossings on ${open.attempts} orders, so the walk is not blind`);
+}
+
 // A landing is allowed to sit outside the HUB footprint, because the net is a plane at the face and
 // the HUB body behind it is solid, so the ball is expelled. Anything beyond this margin is a ball
 // that travelled over the HUB instead of into it.
@@ -760,6 +972,8 @@ humanChecks(77003);
 feedChecks(20260110);
 feedChecks(77003);
 netChecks(20260110);
+passHubChecks(20260110);
+seamChecks(20260110);
 missLandingChecks(20260110);
 startChecks(20260110);
 spacingChecks(20260110);

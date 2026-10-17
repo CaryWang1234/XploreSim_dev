@@ -22,6 +22,7 @@
     "lever": "node scripts/lever.mjs",
     "team": "node scripts/team.mjs",
     "cap": "node scripts/cap.mjs",
-    "defcal": "node scripts/defcal.mjs"
+    "defcal": "node scripts/defcal.mjs",
+    "autowin": "node scripts/autowin.mjs"
   }
 }

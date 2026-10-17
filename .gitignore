@@ -17,3 +17,9 @@ npm-debug.log*
 # number they hold is reproducible from the committed scripts, so they are not
 # evidence to keep in the repo.
 .tmp/
+
+# The 2025 REEFSCAPE twin. It is a separate project with its own git history,
+# parked here only because Qoder Sites publishes from inside the conversation
+# directory. Nothing in this repo imports it, and it must stay out of this
+# repo's commits.
+/reefscape/
