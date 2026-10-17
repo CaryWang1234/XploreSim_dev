@@ -102,9 +102,10 @@ The rules this repo has learned the hard way, all of them from a figure that tur
 
 Stated on the page too, because a planner is used to make decisions:
 
-- AUTO scoring is low: the engine puts ≈83 FUEL in during AUTO (81.0 red, 85.8 blue over 12 MATCHes)
-  where real Einstein Finals alliances managed 111-177.
-- TELEOP throughput is high: 5.44 FUEL/s per alliance against ≈4.7 in the real finals.
+- AUTO scoring is low: the engine puts ≈84 FUEL in during AUTO (64.8 red, 102.8 blue over 12 MATCHes,
+  and `autoWinner: 'auto'` resolves that from the simulation, so a 12-MATCH probe does not split it
+  evenly) where real Einstein Finals alliances managed 111-177.
+- TELEOP throughput is high: 5.32 FUEL/s per alliance against ≈4.7 in the real finals.
 - The YELLOW/RED CARD ladder is not priced. A second YELLOW in a phase is a DISQUALIFICATION and its
   tournament cost is outside the model (`sc.contactFouls`).
 - TRAVERSAL RP is rarely reached, so the TOWER ladder is softer than a real elite alliance's.
@@ -113,7 +114,14 @@ Stated on the page too, because a planner is used to make decisions:
 ## Calibration anchors
 
 Real 2026 Einstein Finals data from The Blue Alliance (event `2026cmptx`): alliance average 627, high
-842. The greedy same-roster mirror is 615.7 (611.3 and 620.1 across the two trios), 1.8% under that
-average. Against the hand-written greedy cycling baseline, on identical ROBOTs, the search wins 79.7% of
-MATCHes (n=96, 24 per family over four disjoint seed families) with a margin of +43.6 and a score of
-667.2 against 623.6.
+842. The greedy same-roster mirror is 594.7 (605.1 and 584.2 across the two trios), 5.2% under that
+average. Against the hand-written greedy cycling baseline, on identical ROBOTs, the search wins 75.0% of
+MATCHes (n=96, 24 per family over four disjoint seed families) with a margin of +50.1 and a score of
+658.9 against 608.8.
+
+The anchor sits 5.2% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
+back. The BUMP/TRENCH seam (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP, so the two lanes inside a band
+meet at one seam and nothing connects them) takes about 16 points off the whole outlet-cap curve —
+`hubExitRate` 4.2 → 594.7, 4.8 → 615.5, 5.2 → 627.0, 5.6 → 633.4, n=192 each — so re-deriving the cap
+would put the anchor back on 627. It was not re-derived: every measured figure on the page is anchored on
+that knob, so moving it is a change in its own right, not something to slip in underneath a rule.
