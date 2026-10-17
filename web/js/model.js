@@ -171,9 +171,10 @@ export const DEFAULT_PROFILE = () => ({
   // The three FUEL plays that are a choice rather than a capability, so turning one up is a
   // deliberate tactical decision by the user.
   //   passMode  off     never throw FUEL to a location instead of scoring it
-  //             auto    throw to a partner already back on our half, when that is a real shortcut
-  //             eager   throw to our own ALLIANCE ZONE as soon as the hopper is worth it, whether or
-  //                     not a partner is there to take the load (it becomes loose FUEL for later)
+  //             auto    throw to a partner already back on our half when that is a real shortcut, and
+  //                     to open ground in our own ALLIANCE ZONE when nobody is home to take the load
+  //             eager   the same two targets, but the hopper only has to be worth a throw rather than
+  //                     nearly full, and the saving it must clear is 60 in instead of 150
   // Either way the target has to be inside `passRangeIn`: a throw past the reach lands short of the
   // partner, so the range is what decides which ROBOTS get to pass across the FIELD at all.
   //   pushMode  off     never shove loose FUEL

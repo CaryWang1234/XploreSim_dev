@@ -360,11 +360,11 @@ export function createAI(opts) {
   // 射程 (`passRangeIn`) — past that reach the engine lands the FUEL short of where it was aimed, so an
   // out-of-range partner is a pass that comes down in nobody's hands. Range is what splits the
   // ALLIANCE: a ROBOT with ~500 in of reach can hand its load from inside the opponent's ALLIANCE ZONE
-  // to a partner in its own, and one with 260 has to drive it home. With `allowZone` (the eager
-  // posture) a ROBOT with nobody to throw to aims at empty ground in its own ALLIANCE ZONE instead, if
-  // that is in range: the load becomes loose FUEL on the half we are about to fight for, which is the
-  // play the user asked for.
-  function passTarget(rb, obs, allowZone) {
+  // to a partner in its own, and one with 260 has to drive it home. With nobody home to take it, the
+  // aim point becomes empty ground in our own ALLIANCE ZONE instead — both postures may do this, and
+  // they differ in how full the hopper has to be and how big a saving the throw has to be, not in
+  // which targets are on the menu.
+  function passTarget(rb, obs) {
     const onFarSide = side === 'red' ? rb.x > GEO.centerLineX : rb.x < GEO.centerLineX;
     if (!onFarSide) return null;
     const range = rb.passRangeIn;
@@ -386,7 +386,7 @@ export function createAI(opts) {
         best = { x: m.x, y: m.y };
       }
     }
-    if (best || !allowZone) return best;
+    if (best) return best;
     // Nobody is home to take it, so aim at our own ALLIANCE ZONE: deep enough to be clear of the HUB
     // mouth (a pass can never be a disguised scoring shot) and clear of the HUB-exit zone, because a
     // pile that lands inside it invites a G408 foul the moment somebody collects it.
@@ -805,19 +805,21 @@ export function createAI(opts) {
       // the landing scatters, so somebody has to pick the FUEL up again: the load has to be worth
       // handing over, and the target has to be a real shortcut to the HUB rather than a lateral move.
       // The per-ROBOT posture comes from the setup panel: `auto` is this conservative rule, `eager`
-      // lowers the bar and lets the aim point be our own ALLIANCE ZONE, `off` never throws.
+      // lowers both bars, `off` never throws. With nobody home, the aim point is our own ALLIANCE ZONE.
       const passMode = rb.passMode || 'auto';
       if (passMode !== 'off') {
         const need = passMode === 'eager' ? weights.passEagerFrac : weights.passWhenFarFrac;
         if (frac >= need) {
-          const pt = passTarget(rb, obs, passMode === 'eager');
+          const pt = passTarget(rb, obs);
           if (pt) {
             const myToHub = Math.hypot(rb.x - g.hub.x, rb.y - g.hub.y);
             const theirToHub = Math.hypot(pt.x - g.hub.x, pt.y - g.hub.y);
             // `eager` is the user overruling the planner's judgement about whether anybody is there to
             // catch it, so it only insists that the aim point really is nearer home than the ROBOT is.
             // `auto` keeps the strict economics test: a 150 in saving, which in practice means the play
-            // only fires when it is unambiguous.
+            // only fires when it is unambiguous. The aim-at-home point sits 77 in from our own HUB, so
+            // the same test still demands a ROBOT more than 227 in out: a pass from the middle of the
+            // NEUTRAL ZONE is refused, one from inside the opponent's zone is not.
             const margin = passMode === 'eager' ? 60 : 150;
             if (theirToHub + margin < myToHub) {
               why.reason = `pass-${passMode}`;
@@ -909,9 +911,11 @@ export function createAI(opts) {
             return ret({ mode: INTENT.DEFEND, targetRobot: tgt });
           }
         }
-        // 4. Hand the load to a partner who still has room, so this ROBOT can go back out.
+        // 4. Hand the load to a partner who still has room, so this ROBOT can go back out. Nobody home
+        // means the aim point is our own ALLIANCE ZONE, and `passRangeIn` decides whether either is on
+        // the menu at all.
         if (frac > 0 && rb.passMode !== 'off') {
-          const pt = passTarget(rb, obs, rb.passMode === 'eager');
+          const pt = passTarget(rb, obs);
           if (pt) {
             why.reason = 'idle-pass';
             return ret({ mode: INTENT.PASS, target: pt });

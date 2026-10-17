@@ -121,8 +121,8 @@ const CROSS_OPTIONS = [
 // settings next to the BUMP/TRENCH one. Both default to the conservative behaviour.
 const PASS_OPTIONS = [
   { v: 'off', t: 'Off' },
-  { v: 'auto', t: 'Careful (teammate in range, big saving)' },
-  { v: 'eager', t: 'Aggressive (throw to your own half, if in range)' },
+  { v: 'auto', t: 'Careful (in range, only if it saves a lot)' },
+  { v: 'eager', t: 'Aggressive (same targets, thrown sooner)' },
 ];
 const PUSH_OPTIONS = [
   { v: 'off', t: 'Off' },

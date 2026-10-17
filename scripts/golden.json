@@ -31,51 +31,51 @@
       "name": "pinned-score-contact",
       "note": "every ROBOT held on SCORE, §7.4.4 hard contact on, so the foul path is in the digest",
       "seed": 90001,
-      "full": 1630896034,
+      "full": 3354180423,
       "cuts": [
         2626897592,
         4291579710,
-        1378406167,
-        4120500939,
-        1630896034
+        2177338547,
+        2876576494,
+        3354180423
       ],
       "total": {
-        "red": 647,
-        "blue": 656
+        "red": 610,
+        "blue": 642
       },
       "fuel": {
-        "red": 627,
-        "blue": 621
+        "red": 590,
+        "blue": 622
       },
       "frames": 1601,
-      "scored": 1192,
-      "collected": 1386,
-      "fouls": 1
+      "scored": 1165,
+      "collected": 1428,
+      "fouls": 0
     },
     {
       "name": "ai-vs-greedy",
       "note": "the shipped search on red, greedy on blue: MCTS, opponent model and the whole intent ladder",
       "seed": 700001,
-      "full": 2555341347,
+      "full": 3638172970,
       "cuts": [
         73384132,
         1914339595,
-        3679819999,
-        2860979908,
-        2555341347
+        2683445695,
+        2311397227,
+        3638172970
       ],
       "total": {
-        "red": 575,
-        "blue": 579
+        "red": 564,
+        "blue": 542
       },
       "fuel": {
-        "red": 555,
-        "blue": 509
+        "red": 544,
+        "blue": 522
       },
       "frames": 1601,
-      "scored": 1023,
-      "collected": 1264,
-      "fouls": 4
+      "scored": 1027,
+      "collected": 1283,
+      "fouls": 0
     }
   ]
 }

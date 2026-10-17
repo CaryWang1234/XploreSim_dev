@@ -95,15 +95,17 @@ export const DEFAULT_WEIGHTS = {
   // partners dump, and the load it was holding is the one thing that could have scored on the first
   // live tick. 0 turns the rung off, which is the control the value was measured against.
   darkPrepSec: 4,
-  // PASS: how full a collector on the far half has to be before it throws its load back to a partner
-  // instead of driving it home itself. This is the `auto` posture — the conservative one, and the
-  // shipped default for every ROBOT. It is deliberately strict: measured over 24 MATCHES against the
-  // greedy baseline, relaxing it (0.6 fill, 90 in margin) did not move the average score but cut the
-  // win rate from 25% to 6%, so the AI's plan search cannot yet price a pass correctly and the play
-  // stays user-driven. Set a ROBOT to `eager` to use it.
+  // PASS: how full a collector on the far half has to be before it throws its load back home instead
+  // of driving it there itself. This is the `auto` posture — the conservative one, and the shipped
+  // default for every ROBOT. It is deliberately strict: measured over 24 MATCHES against the greedy
+  // baseline, relaxing it (0.6 fill, 90 in margin) did not move the average score but cut the win rate
+  // from 25% to 6%, so the AI's plan search cannot yet price a pass correctly and no macro plan is
+  // built around one. The micro ladder still uses it whenever these two bars are met. Both postures
+  // aim at a partner on our half or, with nobody home, at empty ground in our own ALLIANCE ZONE, and
+  // both are capped by the ROBOT's `passRangeIn`.
   passWhenFarFrac: 0.85,
-  // PASS (eager posture): the load only has to be worth a throw, because an eager ROBOT will aim at
-  // its own ALLIANCE ZONE even when no partner is there to catch the FUEL.
+  // PASS (eager posture): the load only has to be worth a throw rather than fill the hopper, because
+  // `eager` is the user overruling the planner on whether anybody is there to catch it.
   passEagerFrac: 0.34,
   // defence
   defendCarryWeight: 0.4407,
