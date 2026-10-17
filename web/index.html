@@ -280,9 +280,10 @@
 
         <div class="tab-body" id="tab-data" hidden>
           <h3>Calibration, AI strength and change notes</h3>
-          <p class="hint">Every figure below was measured on the current build. Open a block for the sample it came from.</p>
+          <p class="hint">Every figure below was measured on the current build; its sample and standard error are in the table and in README.md.</p>
           <div class="table-wrap"><table id="calib-table"></table></div>
           <div class="notes">
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note" open>
               <summary><b>Calibrated against real matches</b><i>greedy mirror 594.7 against a real average of 627 — 5.2% under</i></summary>
               <div class="body">
@@ -293,6 +294,8 @@
                 <p>Reproduce with <span class="mono">node scripts/mirror.mjs</span> and <span class="mono">MATCHES=12 node scripts/probe.mjs</span>. The mirror ends with its seat test: the greedy mirror's red−blue split is <strong>−3.4 ± 6.3</strong> over 96 MATCHes, so the calibration anchor carries no seat advantage. The same run on a plan pinned to all-SCORE used to show one — <strong>+27.7 ± 6.3</strong>, 4.4 standard errors, on the build before the lanes — and it now reads <strong>+9.7 ± 7.3</strong>, which is nothing. Whatever that asymmetry was, it was an artefact of a ROBOT being able to slide sideways across a BUMP/TRENCH seam to get home, and the seam rule took it away.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Why red and blue are not 60 points apart</b><i>one roster confound and two engine bugs, plus what is left</i></summary>
               <div class="body">
@@ -305,6 +308,8 @@
                 <p>Reproduce with <span class="mono">node scripts/mirror.mjs</span> (prints both seat tests) and <span class="mono">TR=0 MATCHES=24 node scripts/seat.mjs</span>.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>How strong the AI is</b><i>75.0% of 96 MATCHes against greedy, 658.9 to 608.8</i></summary>
               <div class="body">
@@ -318,6 +323,8 @@
                 <p>Reproduce with <span class="mono">ARMS=base,noSearch,noDefend N=24 FAMILIES=90001,700001,500003,300007 node scripts/ab.mjs</span>, and the seat split with <span class="mono">SEAT=red N=48 FAMILIES=90001,700001 node scripts/ab.mjs</span>.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>What this round's physics costs and buys</b><i>square bodies, oriented collision, one Dumper face, turret fire on the move</i></summary>
               <div class="body">
@@ -328,6 +335,8 @@
                 <p>Reproduce with <span class="mono">PHYS=physAllOff,noRestitution,noFaceGate,darkFire,turnRampOff N=48 FAMILIES=90001,700001 node scripts/ab.mjs</span>.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>The levers, measured</b><i>chassis, mechanism, driver, field size</i></summary>
               <div class="body">
@@ -338,6 +347,8 @@
                 <p><strong>Field size</strong> — 3v3 <strong>629.7</strong>, 1v1 <strong>300.9</strong>. A lone ROBOT recovers <strong>48%</strong> of a three-ROBOT ALLIANCE. FUEL staging holds either way: §6.3.4 stages a fixed 504, so a benched ROBOT's preload goes back to the NEUTRAL ZONE.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Why the weights have not been retrained</b><i>two offline runs, both refused by the holdout gate</i></summary>
               <div class="body">
@@ -346,6 +357,8 @@
                 <p>So the shipped weights stay. The honest statement is that this retune needs roughly <strong>150 MATCHes per candidate</strong> against the 32 it gets. <span class="mono">scripts/train.mjs</span> prints its noise floor before starting and refuses a candidate whose holdout margin does not beat twice the standard error.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>A match is a file</b><i>Export and Import on the transport bar</i></summary>
               <div class="body">
@@ -354,6 +367,8 @@
                 <p>The file is versioned (<span class="mono">xplore-match-v1</span>) and Import refuses anything else, so a future format change fails with a message instead of replaying the wrong thing. It carries no secrets — it is the same data the panel already shows.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>The replay is pinned, so a refactor cannot quietly move the ball</b><i>scripts/golden.mjs</i></summary>
               <div class="body">
@@ -361,9 +376,11 @@
                 <p>It is a regression guard, not a correctness test: if a change moves the ball, it says which checkpoint moved first and what the score did, and you decide whether that was the point. <span class="mono">node scripts/golden.mjs</span> checks against the stored fixture and exits non-zero; <span class="mono">--record</span> rewrites it. The teeth were proved by mutation — moving the HUB outlet cap by 0.1 FUEL/s, which is smaller than most of the edits this page documents, drifted all three MATCHes and failed the run.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
           </div>
-          <h3>How the engine models it</h3>
+          <!-- section heading for the commented engine notes below -->
           <div class="notes">
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>The HUMAN PLAYER</b><i>throw while your HUB is live, dump when it is dark</i></summary>
               <div class="body">
@@ -375,6 +392,8 @@
                 <p><strong>Not re-measured on this build.</strong> The HP's point figures this page carried (≈60 a match; rule 34% / hold 31% / always throw 43% / always dump 21% over 96 AI-vs-greedy MATCHes each) predate the square-body and chassis rewrite. They are direction only. Dumping all match was clearly the worst of the four, 22 points behind always throwing; the rule and always throwing could not be told apart. An HP that does nothing is legal and leaves all 24 FUEL off the FIELD for the whole match — set both throw rates to 0 to watch that build.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Sweep while you shoot</b><i>the roller and the shooter are separate mechanisms</i></summary>
               <div class="body">
@@ -382,6 +401,8 @@
                 <p>What it rewards is dumping early: a Dumper that only fires when full has a full hopper, so it cannot take anything in. Over 6 MATCHes the roller runs on <strong>52940 ticks</strong> and actually swallows a FUEL on <strong>7591</strong> of them (14%), and those ticks include SCORE and PASS, not just INTAKE.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Defence really blocks shots</b><i>oriented block radius: 16.7 in face-on, 22.4 in corner-on</i></summary>
               <div class="body">
@@ -392,8 +413,10 @@
                 <p>The weight still ships at <strong>0</strong>, because pricing the play made the AI worse. Setting it to the fitted value moved the dark-window mix from DEFEND 16.1% / COLLECT 63.3% to <strong>26.6% / 54.9%</strong> — the search bought the defence it could now see — and over 96 MATCHes on four disjoint seed families that cost <strong>9.9 points of win rate, 14.1 of score and 8.9 of margin</strong>. The diagnosis is in the two halves of the trade: the model prices what a defender takes from the opponent correctly and under-prices what it costs its own side, because a DEFEND role during your OWN inactive window looks nearly free — that ROBOT could not score anyway — when the engine is losing the whole bank of FUEL it would have carried into the window that follows. A half-priced play is worse than an unpriced one: it moves the decision without moving the ledger. Reproduce with <span class="mono">node scripts/defcal.mjs</span> and <span class="mono">W=defenseEfficacy:0.1 MATCHES=8 node scripts/dark.mjs</span>.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
           </div>
           <div class="notes">
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Hard contact between ROBOTS: G415 / G416 / G417</b><i>off by default — the fouls are priced, the card is not</i></summary>
               <div class="body">
@@ -405,6 +428,8 @@
                 <p><strong>Who is charged, and a bug that paid the wrong side.</strong> Every foul the engine logs carries the ROBOT that committed it, the ALLIANCE it was assessed against and the clause, and the Numbers tab now lists them in match order with a jump to the second it happened; the batch view averages the same thing per ROBOT. Building that list is what found the bug: G418 (a PIN over 3 s), G419 (closing the traversal corridors) and G415/G416/G417 were all being charged to the <em>victim's</em> alliance, so the side that pinned, blocked the band or rammed an opponent kept the points. G408, G420 and G427 were right. The verifier's own check only compared the label on the event with the offender's colour, so it passed while the arithmetic handed the points the wrong way. Both are fixed: the engine charges the offender, and the guard now asserts that the foul is assessed against the rammer's own ALLIANCE. It is worth saying what that changed about the conclusion — with the bug, the engine was <em>paying</em> the AI for fouls, so the ablation said removing DEFEND gained 5.2 win points at n=192. Charge the fouls where the rules charge them and that reading became the <strong>−8.3</strong> this page carried for two builds; on the shipped build the same ablation is <strong>+1.6</strong>, which is nothing at all — see "How strong the AI is" for the four answers this one knob has now given.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Passing and bulldozing</b><i>per ROBOT, and the search does not price it</i></summary>
               <div class="body">
@@ -417,8 +442,10 @@
                 <p><strong>The micro policy passes; the search still does not price it.</strong> The fast model cannot value a throw, so no plan is built around one and the macro layer treats passing as a per-ROBOT habit rather than an objective. That used to mean the AI almost never passed — now that <span class="mono">Careful</span> may aim at home too, the shipped default throws 277 times in 24 MATCHes (341 on the build before the lanes, 276 on the one that first allowed it, 82 before that), and "How strong the AI is" carries what each step cost: 79.7% to 76.0% for the direct throw, 76.0% to 69.8% once the HUB was allowed to stop a throw, and back up to <strong>75.0%</strong> once the lanes were closed. The older figures this note carried — loosening Careful dropped the win rate from 25% to 6%, bulldozing is worth about 99 on the mirror — predate the square-body rewrite and have not been re-measured. The price of <span class="mono">Aggressive</span> has: 145 points a MATCH at a 520 in reach, and it falls as the reach falls (the sweep above has the arms).</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
           </div>
           <div class="notes">
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Square bodies, chassis and turn rate</b><i>new fields on every ROBOT card</i></summary>
               <div class="body">
@@ -429,6 +456,8 @@
                 <p>Both matter because a square ROBOT with one shooting face has to <em>rotate</em> onto the HUB. On the pinned mirror a tank drive costs <strong>184 points</strong> against a swerve (446.2 to 629.7). Mecanum sits <strong>80 points</strong> under a swerve at <strong>549.2</strong>: it strafes rather than turning to change direction, which used to make it nearly as good as a swerve, until the intake mouth moved to the back face and its 78% reverse leg became the end that has to arrive first.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Which face the intake is on</b><i>a full-width slot, and Back is the default</i></summary>
               <div class="body">
@@ -441,6 +470,8 @@
                 <p><strong>So why is Back the default?</strong> Not because the mirror pays for it — on this build it does not. It is the bumper argument above: a Front slot and a front-mounted Dumper shooter want the same edge, and the default should sit on the face that is free on both mechanisms. The chassis that would notice a face most is mecanum, which leads with a face its reverse leg only reaches at 78% of top speed; its own face sweep has not been re-run since the layout changed.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Where each ROBOT starts</b><i>§5.3 STARTING LINE, G303-D</i></summary>
               <div class="body">
@@ -448,6 +479,8 @@
                 <p>One honest deviation: this engine's BUMPS, TRENCHES and HUB straddle the ALLIANCE ZONE line rather than sitting beyond it, so a ROBOT centred on the line would stand inside the structure in its lane. Each start is therefore set 38 in inside the line, as far forward as its lane allows, and the verifier checks both the lane and that the start is inside the ALLIANCE ZONE and clear of the band.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Who is driving, and who is on the field</b><i>the driver is the biggest single lever on this page</i></summary>
               <div class="body">
@@ -456,6 +489,8 @@
                 <p><strong>Off the field</strong> benches a ROBOT: no start position, no preload, never in the replay, and the DRIVER STATIONS close up around it. Field one a side and the MATCH is a 1v1 — a simulation setting, not a legal configuration, since in a real MATCH every team fields its ROBOT. Measured the same way, a 1v1 scores <strong>300.9</strong> against the 3v3's <strong>629.7</strong>, so a lone ROBOT recovers <strong>48%</strong>. FUEL staging holds either way: §6.3.4 stages a fixed 504, so a benched ROBOT's 8-FUEL preload moves back into the NEUTRAL ZONE instead of the FIELD shrinking.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>The inactive window: no idle rule, no wasted shots</b><i>50 s an alliance cannot score, spent as an ordered ladder</i></summary>
               <div class="body">
@@ -467,6 +502,8 @@
                 <p>Reproduce with <span class="mono">MATCHES=8 node scripts/dark.mjs</span>, which tallies the intent mix, the shots fired at a dead HUB and the passes thrown during every INACTIVE frame, for the AI and the baseline separately; <span class="mono">node scripts/gap.mjs</span> prints the same two drivers' collected / scored / wasted / distance side by side; and <span class="mono">ARMS=base PREPS=0,4,8 N=48 FAMILIES=90001,700001 node scripts/ab.mjs</span> sweeps the come-home rung.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Teamwork, and one time-aware idea that lost</b><i>two ROBOTS on one pile; a rejected weight</i></summary>
               <div class="body">
@@ -477,6 +514,8 @@
                 <p>Reproduce with <span class="mono">MATCHES=6 node scripts/team.mjs</span> and <span class="mono">ARMS=base SWEEP="mateSeparation:0" N=48 FAMILIES=90001,700001 node scripts/ab.mjs</span>.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Crossing the field (BUMP / TRENCH)</b><i>§5.7 height rule, and the seam between the two lanes</i></summary>
               <div class="body">
@@ -485,6 +524,8 @@
                 <p><strong>Measured (n=96 per arm, four seed families).</strong> The rule costs the AI <strong>4.6 points of its own score</strong> (663.4 → 658.9) and the hand-written cycling baseline <strong>15.5</strong> (624.3 → 608.8), so the AI's win rate against greedy <em>goes up</em>, from <strong>69.8% to 75.0%</strong>, and its margin from +39.2 to <strong>+50.1</strong>. That is not the AI getting better; it is a lane-constrained FIELD punishing a plan that drives straight at the nearest pile. The verifier's probe orders <strong>2,600</strong> sideways lane changes from inside a band and <strong>0</strong> carry a centre across; the same probe with the rule switched off crosses <strong>527</strong> times, which is what makes the zero a result instead of a blind spot.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>Turret or Dumper</b><i>94 points apart, and they now fail differently</i></summary>
               <div class="body">
@@ -493,6 +534,8 @@
                 <p>On the pinned mirror the gap is <strong>turret 685.2 against dumper 591.3</strong>, 94 points — wider than the 49 an earlier build reported, because a turret slews independently of the drive, so the turn limit does not slow its aim, while a Dumper has to point the whole car. The turret's own aim time barely matters; its score did not move between 0 and 0.15 s, also from the earlier build.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
+            <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note">
               <summary><b>The net behind the HUB, and FUEL that never stacks</b><i>§5.4 and §5.10.1</i></summary>
               <div class="body">
@@ -500,6 +543,7 @@
                 <p>Two FUEL are balls on the carpet and cannot share a point. §5.10.1 makes each one a 5.91 in foam ball, and every landing is an independent random draw, so balls used to land stacked — which read as a rendering bug and let one sweep take two off the same inch. Every landing now goes through one placement helper: expel the ball from any structure it came down inside, then nudge it off any loose ball it would overlap to one diameter apart. The opening layout was the worst case, because the 206 × 72 in NEUTRAL ZONE box holds 360 FUEL — past the density where a uniform scatter jams — so its fallback spot now goes down on a jittered hexagonal lattice one diameter across, which reads as a corral rather than a grid. It is a placement fix, not a continuous separation pass, so it does not stir the piles the MATCH itself builds.</p>
               </div>
             </details>
+            ────────────────────────────────────────── -->
           </div>
         </div>
       </aside>
