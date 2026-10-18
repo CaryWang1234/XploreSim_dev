@@ -676,37 +676,73 @@ const MISS_PAST_LIMIT_IN = 20;
 // picked out by a short gap between the last in-flight frame and the first loose one. The control is
 // sc.netMiss = false, the pre-fix drop, which must put balls out past that face or the check is not
 // measuring anything.
-function missLandingRun(seed, netMiss) {
+function missLandingRun(seed, netMiss, spread) {
   let landings = 0;
   let pastFace = 0;
   let worst = -Infinity;
+  let oneFrame = 0;
+  const jumps = [];
   const res = simulateMatch({
     redAlliance: makeAlliance(SAMPLES.slice(0, 3), 'red'),
     blueAlliance: makeAlliance(SAMPLES.slice(0, 3), 'blue'),
     redPolicy: naivePolicy('red'),
     bluePolicy: naivePolicy('blue'),
-    scenario: { ...defaultScenario(), seed, autoWinner: 'auto', netMiss },
+    scenario: { ...defaultScenario(), seed, autoWinner: 'auto', netMiss, ...(spread === undefined ? {} : { shotSpreadIn: spread }) },
     record: true,
   });
   const face = { red: GEO.red.hub.x + FIELD.hub.sizeIn / 2, blue: GEO.blue.hub.x - FIELD.hub.sizeIn / 2 };
-  const last = new Map();
-  for (const f of res.timeline) for (const b of f.fuel) if (b[3] === 4) last.set(b[0], [f.t, b[4]]);
-  for (const [i, [t, tgt]] of last) {
+  // The last frame is pushed after every in-flight FUEL has been resolved at the match clock, so a ball
+  // caught airborne at the buzzer "lands" on its aim point from wherever the clock stopped it. That is a
+  // truncation, not a statement about where a launch goes, so the final frame is not a landing.
+  const endT = res.timeline[res.timeline.length - 1].t;
+  // Group the in-flight frames into flights: a ball id is recycled all MATCH, so its positions have to be
+  // read as consecutive runs. One run gives the step (first to last over the ticks it flew) and the frame
+  // it left the air in. A flight of a single frame is a launch blocked in its first tick, which is a
+  // legitimate early end and has no step to measure against, so it is counted and left out of the bound.
+  const runs = new Map();
+  const done = new Map();
+  res.timeline.forEach((f, k) => {
+    const live = new Set();
+    for (const b of f.fuel) {
+      if (b[3] !== 4) continue;
+      live.add(b[0]);
+      const r = runs.get(b[0]);
+      if (r && r.k === k - 1) {
+        r.k = k;
+        r.lx = b[1];
+        r.ly = b[2];
+        r.n += 1;
+        r.t = f.t;
+        r.tgt = b[4];
+      } else {
+        if (r) done.set(b[0], r);
+        runs.set(b[0], { k, n: 1, fx: b[1], fy: b[2], lx: b[1], ly: b[2], t: f.t, tgt: b[4] });
+      }
+    }
+    for (const [id, r] of runs) if (!live.has(id)) done.set(id, r);
+  });
+  for (const [id, r] of done) {
+    if (r.t >= endT) continue;
     for (const f of res.timeline) {
-      if (f.t <= t) continue;
-      const b = f.fuel.find((e) => e[0] === i);
+      if (f.t <= r.t) continue;
+      if (f.t >= endT) break;
+      const b = f.fuel.find((e) => e[0] === id);
       if (!b) continue;
       if (b[3] === 4) break;
-      if (f.t - t <= 0.6) {
+      if (f.t - r.t <= 0.6) {
         landings += 1;
-        const past = tgt === 1 ? b[1] - face.red : face.blue - b[1];
+        const past = r.tgt === 1 ? b[1] - face.red : face.blue - b[1];
         if (past > MISS_PAST_LIMIT_IN) pastFace += 1;
         if (past > worst) worst = past;
+        if (r.n > 1) {
+          const step = Math.hypot(r.lx - r.fx, r.ly - r.fy) / (r.n - 1);
+          jumps.push({ jump: Math.hypot(b[1] - r.lx, b[2] - r.ly), step });
+        } else oneFrame += 1;
       }
       break;
     }
   }
-  return { landings, pastFace, worst };
+  return { landings, pastFace, worst, jumps, oneFrame };
 }
 
 function missLandingChecks(seed) {
@@ -728,6 +764,39 @@ function missLandingChecks(seed) {
   console.log('--- §5.4 net over a missed shot (direct flight landings, in past the HUB face) ---');
   console.log(`  net on   landings ${on.landings}  past the face ${on.pastFace}  worst ${on.worst.toFixed(1)}`);
   console.log(`  net off  landings ${off.landings}  past the face ${off.pastFace}  worst ${off.worst.toFixed(1)}`);
+}
+
+// A launch now flies AT the point it comes down on. Before this the flight was integrated to the exact
+// HUB centre and the drop was drawn independently at resolution, so the replay showed a ball arriving
+// at the middle of the structure and turning up loose 50 in away — the miss looked exactly like a made
+// shot that teleported. The guard measures that gap against the ball's own one-tick step (the last frame
+// before resolution is a step short of the aim point, and placeLoose() may nudge the landing by a ball
+// diameter, so the bound is 1.5 steps + 8 in rather than a magic number). The control is
+// sc.shotSpreadIn = 0, which restores the aimed-at-centre flight and the independent drop, and must
+// break the bound or the measurement is not looking at anything.
+function dispersionChecks(seed) {
+  const run = (spread) => {
+    const jumps = [];
+    let skipped = 0;
+    for (const s of [seed, seed + 29]) {
+      const r = missLandingRun(s, undefined, spread);
+      jumps.push(...r.jumps);
+      skipped += r.oneFrame;
+    }
+    const bound = (r) => r.jump > 1.5 * r.step + 8;
+    return { n: jumps.length, bad: jumps.filter(bound).length, worst: Math.max(0, ...jumps.map((r) => r.jump - 1.5 * r.step)), skipped };
+  };
+  const on = run(undefined);
+  const off = run(0);
+  if (on.n < 20) throw new Error(`only ${on.n} shot landings recorded, so the continuity check has nothing to measure`);
+  if (on.skipped > on.n) throw new Error(`${on.skipped} of ${on.n + on.skipped} landings were single-frame flights, so the bound is being tested against a minority of them`);
+  if (on.bad > 0) throw new Error(`${on.bad} of ${on.n} missed shots came to rest more than a step and a ball width from where the replay last saw them flying (worst ${on.worst.toFixed(1)} in past the bound)`);
+  if (off.bad === 0) {
+    throw new Error('the no-dispersion control broke the continuity bound zero times, so the walk is not measuring the teleport it is meant to catch');
+  }
+  console.log('--- a launch lands where it was drawn going (last flight frame to rest, bound 1.5 steps + 8 in) ---');
+  console.log(`  dispersion on  landings ${on.n} (plus ${on.skipped} blocked in their first tick)  outside the bound ${on.bad}  worst overshoot ${on.worst.toFixed(1)} in`);
+  console.log(`  control, spread 0: outside the bound ${off.bad} of ${off.n} landings, worst ${off.worst.toFixed(1)} in, so the walk is not blind`);
 }
 
 // FUEL spacing. §5.10.1 makes FUEL a 5.91 in ball, so two of them cannot sit at one point. The
@@ -975,6 +1044,7 @@ netChecks(20260110);
 passHubChecks(20260110);
 seamChecks(20260110);
 missLandingChecks(20260110);
+dispersionChecks(20260110);
 startChecks(20260110);
 spacingChecks(20260110);
 contactChecks(20260110);

@@ -16,6 +16,8 @@ npm run serve      # http://127.0.0.1:4180
 npm run check      # encoding, index.html tag balance, every module parses
 npm run verify     # engine invariants (no FUEL invented, no shot from outside the ALLIANCE ZONE, …)
 npm run golden     # replay three pinned MATCHes and compare digests with scripts/golden.json
+npm test           # worker recovery, replay export, input guards, and renderer cache regression tests
+npm run validate   # check + test + verify + golden
 ```
 
 Every number the site states is reproducible from a committed script:
@@ -50,8 +52,35 @@ web/js/mc.js        one MATCH orchestrator, shared by the UI worker and the scri
 web/js/league.js    baselines, A/B harnesses, the weight evolution loop
 web/js/viz.js       canvas field rendering
 web/js/ui.js        panels, charts, replay transport, match export/import
+web/js/worker-client.js  worker request lifecycle and recovery after a worker failure
+web/js/replay.js    time-based replay sampling that preserves resolution across repeated exports
 scripts/            the measurements above, plus serve.mjs and check_web.mjs
 ```
+
+`reefscape/` is a separate repository with its own history and checks; it is excluded from this
+repository by `.gitignore`. Changes to the two simulators should be validated independently.
+
+## Runtime and replay maintenance
+
+The UI captures the input roster, weights and run context before sending a simulation to the worker.
+That snapshot is committed with a successful result, used for replay labels and written to the export;
+editing the setup while a run is pending must not relabel the result. Calibration and user computations
+share a busy guard. Worker startup, execution and message-decoding failures reject waiting requests,
+release the controls, and allow a subsequent request to start a new worker.
+The Cancel task control terminates the active worker without replacing the previous replay or its
+input snapshot. The next computation starts a fresh worker.
+
+Playback owns one animation callback. Pausing or seeking cancels it, and keyboard jumps use MATCH
+time rather than a frame count, including imported recordings. Exports sample by elapsed time so
+importing and re-exporting a recording does not repeatedly halve its resolution.
+Phase controls support Enter/Space; analysis tabs support Left/Right/Home/End with visible keyboard
+focus and tab/panel accessibility semantics. Status and progress have accessible text updates.
+
+The field renderer caches static geometry at the current canvas size and pixel ratio; moving robots,
+FUEL, HUB state and HUMAN PLAYER actions are still drawn per frame. Resizing or changing pixel density
+rebuilds the background. The HUD updates its phase and HUB markup only when those values change.
+These changes affect presentation and task handling; the physics, rule constants and policy weights
+remain covered by the existing invariant and golden-replay checks.
 
 ## Two engines, on purpose
 
@@ -102,10 +131,10 @@ The rules this repo has learned the hard way, all of them from a figure that tur
 
 Stated on the page too, because a planner is used to make decisions:
 
-- AUTO scoring is low: the engine puts ≈84 FUEL in during AUTO (64.8 red, 102.8 blue over 12 MATCHes,
+- AUTO scoring is low: the engine puts ≈97 FUEL in during AUTO (92.4 red, 100.7 blue over 12 MATCHes,
   and `autoWinner: 'auto'` resolves that from the simulation, so a 12-MATCH probe does not split it
   evenly) where real Einstein Finals alliances managed 111-177.
-- TELEOP throughput is high: 5.32 FUEL/s per alliance against ≈4.7 in the real finals.
+- TELEOP throughput is high: 5.34 FUEL/s per alliance against ≈4.7 in the real finals.
 - The YELLOW/RED CARD ladder is not priced. A second YELLOW in a phase is a DISQUALIFICATION and its
   tournament cost is outside the model (`sc.contactFouls`).
 - TRAVERSAL RP is rarely reached, so the TOWER ladder is softer than a real elite alliance's.
@@ -114,14 +143,18 @@ Stated on the page too, because a planner is used to make decisions:
 ## Calibration anchors
 
 Real 2026 Einstein Finals data from The Blue Alliance (event `2026cmptx`): alliance average 627, high
-842. The greedy same-roster mirror is 594.7 (605.1 and 584.2 across the two trios), 5.2% under that
-average. Against the hand-written greedy cycling baseline, on identical ROBOTs, the search wins 75.0% of
-MATCHes (n=96, 24 per family over four disjoint seed families) with a margin of +50.1 and a score of
-658.9 against 608.8.
+842. The greedy same-roster mirror is 593.4 (601.1 and 585.7 across the two trios), 5.4% under that
+average. Against the hand-written greedy cycling baseline, on identical ROBOTs, the search wins 65.1% of
+MATCHes (n=96, 24 per family over four disjoint seed families) with a margin of +31.1 and a score of
+648.1 against 617.0.
 
-The anchor sits 5.2% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
-back. The BUMP/TRENCH seam (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP, so the two lanes inside a band
-meet at one seam and nothing connects them) takes about 16 points off the whole outlet-cap curve —
-`hubExitRate` 4.2 → 594.7, 4.8 → 615.5, 5.2 → 627.0, 5.6 → 633.4, n=192 each — so re-deriving the cap
-would put the anchor back on 627. It was not re-derived: every measured figure on the page is anchored on
-that knob, so moving it is a change in its own right, not something to slip in underneath a rule.
+The anchor sits 5.4% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
+back. Two model changes put it there. The BUMP/TRENCH seam (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP,
+so the two lanes inside a band meet at one seam and nothing connects them) took about 16 points off the
+whole outlet-cap curve. Giving a launch a dispersion took about 1 more off the anchor and is worth 9.9 win
+points AGAINST the search, because a fan of loose FUEL around the HUB helps the machine that only cycles
+more than it helps the one that plans. Re-swept on this build, `hubExitRate` 4.2 → 593.4, 4.6 → 600.6,
+5.0 → 616.3, 5.2 → 613.4 at n=192 per point, with the red-blue split inside one standard error everywhere:
+5.0 would bring the anchor back to 1.7% under. It is not shipped. The cap has no independent measurement,
+every figure on the page is anchored on it, and moving a calibrated knob to erase the cost of a rule change
+is how a simulator stops meaning anything.

@@ -56,6 +56,10 @@ const PHYS = {
   // Restores the model where a ROBOT could slide sideways between a BUMP lane and a TRENCH lane while
   // its centre was still inside the band, and where only an end-to-end crossing of its OWN band was
   // routed through a corridor at all. That is the control for §5.5/§5.6's seam being a structure.
+  // Restores the launch that every FUEL aimed at the exact HUB centre, with the drop drawn at
+  // resolution instead of flown to: the stream collapses to one line and a miss comes down somewhere
+  // else. That is the control for the dispersion, and for the continuity guard in scripts/verify.mjs.
+  noShotSpread: { shotSpreadIn: 0 },
   noSeamLock: { seamLock: false },
   physAllOff: { turretOpportunityMarginIn: 0, contactRestitution: -1, dumperFaceTolDeg: 180 },
 };

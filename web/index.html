@@ -19,7 +19,7 @@
         </div>
       </div>
       <div class="topbar-actions">
-        <div class="chip" id="chip-status">Ready</div>
+        <div class="chip" id="chip-status" role="status" aria-live="polite" aria-atomic="true">Loading…</div>
         <button class="btn ghost" id="btn-tab-rules" type="button">Rule sources</button>
         <button class="btn ghost" id="btn-tab-data" type="button" title="Every figure on this page was measured on the current build, with the script that produced it next to it">Measured data</button>
       </div>
@@ -103,7 +103,7 @@
           <button class="btn" id="btn-mc" type="button">Monte Carlo batch</button>
           <button class="btn" id="btn-bench" type="button">Compare baselines</button>
           <button class="btn" id="btn-train" type="button">Self-play tuning</button>
-          <div class="progress" id="progress" hidden><div class="bar" id="progress-bar"></div><span id="progress-label"></span></div>
+          <div class="progress" id="progress" role="progressbar" aria-label="Current task progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><div class="bar" id="progress-bar"></div><span id="progress-label"></span></div>
         </div>
       </section>
 
@@ -282,6 +282,9 @@
           <h3>Calibration, AI strength and change notes</h3>
           <p class="hint">Every figure below was measured on the current build; its sample and standard error are in the table and in README.md.</p>
           <div class="table-wrap"><table id="calib-table"></table></div>
+          <!-- The essays commented out below were written for the BUMP/TRENCH-seam build and their numbers
+               are frozen there; they are kept for the reasoning, not as current figures. Anything a reader
+               should act on is in the table above or in README.md, both re-measured on the shipped build. -->
           <div class="notes">
             <!-- essay kept in source only, not rendered ─────────────────────────────
             <details class="note" open>

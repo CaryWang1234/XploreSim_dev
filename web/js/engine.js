@@ -149,6 +149,25 @@ const NET_DROP_FAR_IN = 14;
 // base of the structure it hit, so it does not scatter across the FIELD the way a made shot's return
 // does.
 const MISS_DROP_FAR_IN = 30;
+// A launch used to have no dispersion at all: releaseShot pointed every FUEL at the exact HUB centre and
+// one accuracy roll decided whether that counted as made. So a whole hopper drew as one line into the
+// middle of the structure, and a miss came down wherever a later random draw put it rather than where
+// the replay had just shown it going. A launch now aims at a landing point: inside the opening when the
+// roll says made, at or past the face of the prism on the shooter's own side when it says missed. §5.4
+// sizes both the opening (41.7 in) and the prism (47 in), which is what fixes a made shot's circle and a
+// rim shot's minimum radius; how far a wide miss carries past the face is not in the manual, so the
+// spread is the estimate, and sc.shotSpreadIn = 0 restores the aimed-at-centre launch as the control.
+const HUB_OPEN_R_IN = FIELD.hub.openingHexIn / 2; // 20.85: a landing point inside this is in the opening
+const HUB_FACE_IN = FIELD.hub.sizeIn / 2; // 23.5: the footprint, so a miss lands at least this far out
+const SHOT_SPREAD_IN = 22; // swept on the greedy mirror at n=192: 0 -> 594.7, 6 -> 583.2, 12 -> 590.3,
+                           // 18 -> 592.2, 22 -> 593.4, 30 -> 593.7. That is flat inside the mirror's own
+                           // error bar, so 22 is a stated estimate of how far a wide miss carries past the
+                           // face, not a value tuned against the anchor.
+const SHOT_MISS_DRIFT_RAD = 0.9; // ~51 deg either side of the incoming bearing: a miss stays on the half
+                                 // of the HUB the shooter was looking at, which is what a solid prism with
+                                 // the opening on top and a net at its back implies
+const SHOT_FLIGHT_SEC = 0.55; // a ROBOT's launch: the same ball in the air whether it came from 20 in or
+                              // 250 in, which is what the accuracy falloff is measured against
 // Two FUEL are balls on the carpet and cannot occupy the same point, but every landing in the engine
 // is an independent random draw — a HUB exit, a CHUTE dump, a shot coming down — so balls can land
 // stacked. This is the minimum centre-to-centre spacing placeLoose() enforces for a new ball, in
@@ -1223,6 +1242,25 @@ export function simulateMatch(opts) {
     if (moved) rebuildHint();
   }
 
+  // Where a launch aimed at a HUB actually goes, and so where the flight is integrated toward. Three
+  // random draws either way, so the stream does not depend on the outcome of the accuracy roll.
+  function hubAim(hub, fromX, fromY, hit, spreadIn, flightSec) {
+    if (spreadIn <= 0) return { x: hub.x, y: hub.y, vx: (hub.x - fromX) / flightSec, vy: (hub.y - fromY) / flightSec };
+    // The bearing the ball arrives from, measured at the HUB: a miss drifts around that, not around the
+    // centre, because the structure it strikes is the near face.
+    const bearing = Math.atan2(fromY - hub.y, fromX - hub.x);
+    const ang = hit ? rng() * Math.PI * 2 : bearing + rng.range(-SHOT_MISS_DRIFT_RAD, SHOT_MISS_DRIFT_RAD);
+    let rad = hit ? HUB_OPEN_R_IN * Math.sqrt(rng()) : HUB_FACE_IN + rng() * spreadIn;
+    // The footprint is a square, so a landing radius of HUB_FACE_IN at 45 deg is still on the top plate.
+    // Push it out along the same bearing to the face it would have struck, or the replay would show the
+    // ball stopping in the middle of the HUB and the drop then happening somewhere else.
+    const bound = HUB_FACE_IN / Math.max(Math.abs(Math.cos(ang)), Math.abs(Math.sin(ang)));
+    if (rad < bound) rad = bound;
+    const tx = hub.x + Math.cos(ang) * rad;
+    const ty = hub.y + Math.sin(ang) * rad;
+    return { x: tx, y: ty, vx: (tx - fromX) / flightSec, vy: (ty - fromY) / flightSec };
+  }
+
   function releaseShot(rb) {
     const hub = GEO[rb.alliance].hub;
     const zone = GEO[rb.alliance].allianceZone;
@@ -1239,12 +1277,15 @@ export function simulateMatch(opts) {
         fstate[i] = 4;
         fholder[i] = -1;
         fshooter[i] = rb.idx;
-        ftimer[i] = 0.55;
+        ftimer[i] = SHOT_FLIGHT_SEC;
         fhub[i] = rb.alliance === 'red' ? 1 : 2;
         flegal[i] = legal ? 1 : 0;
         fscore[i] = rng() < acc ? 1 : 0;
-        fvx[i] = (hub.x - rb.x) / 0.55;
-        fvy[i] = (hub.y - rb.y) / 0.55;
+        const aim = hubAim(hub, rb.x, rb.y, fscore[i] === 1, sc.shotSpreadIn ?? SHOT_SPREAD_IN, SHOT_FLIGHT_SEC);
+        fpx[i] = aim.x;
+        fpy[i] = aim.y;
+        fvx[i] = aim.vx;
+        fvy[i] = aim.vy;
         // The flight integrates from `fx/fy`, and a FUEL that was carried for at least one tick already
         // sits there. One that came down the hopper and was launched inside the same tick does not: it
         // would still be at the array's zero and fly from the corner of the FIELD instead of from the
@@ -1455,8 +1496,11 @@ export function simulateMatch(opts) {
       ftimer[i] = HUMAN_FLIGHT_SEC;
       fx[i] = start.x;
       fy[i] = start.y;
-      fvx[i] = (hub.x - start.x) / HUMAN_FLIGHT_SEC;
-      fvy[i] = (hub.y - start.y) / HUMAN_FLIGHT_SEC;
+      const aim = hubAim(hub, start.x, start.y, fscore[i] === 1, sc.shotSpreadIn ?? SHOT_SPREAD_IN, HUMAN_FLIGHT_SEC);
+      fpx[i] = aim.x;
+      fpy[i] = aim.y;
+      fvx[i] = aim.vx;
+      fvy[i] = aim.vy;
       hp.hand -= 1;
       hp.stat.throws += 1;
       flights.add(i);
@@ -1649,10 +1693,17 @@ export function simulateMatch(opts) {
       // the back face instead (the first cut at this) took the mirror from 613 to 575, because FUEL
       // pressed against the HUB's back is hard for a ROBOT to reach. Landing in front instead puts the
       // mirror at 635 against the real Einstein average of 627.
-      const land =
-        sc.netMiss === false
-          ? placeLoose(i, hub.x + dir * rng.range(20, 95), hub.y + rng.range(-95, 95))
-          : placeLoose(i, hub.x - dir * (FIELD.hub.sizeIn / 2 + rng.range(NET_DROP_NEAR_IN, MISS_DROP_FAR_IN)), clamp(hub.y + rng.range(-60, 60), 8, GEO.W - 8));
+      let land;
+      if (sc.netMiss === false) {
+        land = placeLoose(i, hub.x + dir * rng.range(20, 95), hub.y + rng.range(-95, 95));
+      } else if ((sc.shotSpreadIn ?? SHOT_SPREAD_IN) > 0) {
+        // The stream the replay just drew ends here, so this is where the ball comes down: at or past the
+        // face it struck, on the shooter's own half of the HUB. Drawing the flight and then dropping the
+        // ball on an independent random draw is what made a miss look like a made shot that teleported.
+        land = placeLoose(i, fpx[i], fpy[i]);
+      } else {
+        land = placeLoose(i, hub.x - dir * (FIELD.hub.sizeIn / 2 + rng.range(NET_DROP_NEAR_IN, MISS_DROP_FAR_IN)), clamp(hub.y + rng.range(-60, 60), 8, GEO.W - 8));
+      }
       fstate[i] = 0;
       fx[i] = land.x;
       fy[i] = land.y;

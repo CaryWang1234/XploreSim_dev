@@ -6,75 +6,75 @@
       "name": "greedy-mirror",
       "note": "hand-written cycling plan on both sides, no defence, faults on",
       "seed": 20260110,
-      "full": 2424428077,
+      "full": 2187984560,
       "cuts": [
-        2826248109,
-        23942214,
-        2582466153,
-        3619256275,
-        2424428077
+        389773921,
+        1001173941,
+        3611339647,
+        477518694,
+        2187984560
       ],
       "total": {
-        "red": 530,
-        "blue": 532
+        "red": 615,
+        "blue": 623
       },
       "fuel": {
-        "red": 510,
-        "blue": 512
+        "red": 595,
+        "blue": 603
       },
       "frames": 1601,
-      "scored": 968,
-      "collected": 1154,
+      "scored": 1147,
+      "collected": 1300,
       "fouls": 0
     },
     {
       "name": "pinned-score-contact",
       "note": "every ROBOT held on SCORE, §7.4.4 hard contact on, so the foul path is in the digest",
       "seed": 90001,
-      "full": 756783031,
+      "full": 3347018771,
       "cuts": [
-        3506891320,
-        4054673685,
-        3850114406,
-        2524075448,
-        756783031
+        2701691461,
+        2321558796,
+        2142179238,
+        1239928481,
+        3347018771
       ],
       "total": {
-        "red": 604,
-        "blue": 641
-      },
-      "fuel": {
-        "red": 584,
+        "red": 616,
         "blue": 591
       },
+      "fuel": {
+        "red": 596,
+        "blue": 541
+      },
       "frames": 1601,
-      "scored": 1125,
-      "collected": 1294,
+      "scored": 1080,
+      "collected": 1286,
       "fouls": 2
     },
     {
       "name": "ai-vs-greedy",
       "note": "the shipped search on red, greedy on blue: MCTS, opponent model and the whole intent ladder",
       "seed": 700001,
-      "full": 2422752456,
+      "full": 224095662,
       "cuts": [
-        2702241393,
-        3853631768,
-        3358442941,
-        3787520965,
-        2422752456
+        2016181141,
+        2177167358,
+        365695342,
+        1390113185,
+        224095662
       ],
       "total": {
-        "red": 556,
-        "blue": 536
+        "red": 542,
+        "blue": 598
       },
       "fuel": {
-        "red": 536,
-        "blue": 526
+        "red": 522,
+        "blue": 578
       },
       "frames": 1601,
-      "scored": 1026,
-      "collected": 1249,
+      "scored": 1059,
+      "collected": 1267,
       "fouls": 0
     }
   ]
