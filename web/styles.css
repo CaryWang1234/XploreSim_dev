@@ -312,6 +312,11 @@ body.cinema #field,
   padding: 6px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; margin-bottom: -1px;
 }
 .tab:hover { color: var(--text); }
+.btn.cancel { color: var(--warn); border-color: var(--warn); }
+button:focus-visible, summary:focus-visible, [role="button"]:focus-visible, [role="tabpanel"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
 .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 .tab-body { padding-top: 10px; max-height: calc(100vh - 230px); overflow-y: auto; }
 .tab-body h3 { margin: 16px 0 6px; font-size: 13px; }

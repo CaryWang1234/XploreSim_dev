@@ -39,6 +39,11 @@ export function monteCarlo(opts) {
     onProgress = null,
   } = opts;
 
+  for (const [name, value] of Object.entries({ matches, iterations })) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${name} must be a positive integer`);
+  }
+  if (aiSide !== 'red' && aiSide !== 'blue') throw new RangeError('aiSide must be red or blue');
+
   const base = { ...defaultScenario(), ...scenarioOverride, seed };
   const agg = {
     matches: 0,

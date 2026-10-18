@@ -5,6 +5,8 @@
   "type": "module",
   "description": "REBUILT (2026 FRC) match simulator and tactical planner. Rules transcribed from the 2026 Game Manual TU21.",
   "scripts": {
+    "test": "node --test scripts/runtime.test.mjs",
+    "validate": "npm run check && npm test && npm run verify && npm run golden",
     "serve": "node scripts/serve.mjs",
     "check": "node scripts/check_web.mjs",
     "verify": "node scripts/verify.mjs",

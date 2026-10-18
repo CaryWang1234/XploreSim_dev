@@ -8,8 +8,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/(.:)/, '$1');
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const HTML = 'web/index.html';
 const JS_DIR = 'web/js';
 

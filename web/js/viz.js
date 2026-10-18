@@ -86,6 +86,7 @@ export class FieldView {
   }
 
   resize(box) {
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
     // Measure the PANEL, not the canvas: resize() writes an inline pixel width, so the canvas's own
     // clientWidth would report the previous fit and the FIELD could never grow back.
     const host = this.canvas.parentElement;
@@ -100,6 +101,10 @@ export class FieldView {
     const scale = Math.min(limitW / VIEW_L, availH / GEO.W);
     const cssW = Math.max(120, Math.round(VIEW_L * scale));
     const cssH = Math.round(GEO.W * scale);
+    if (this.cssW === cssW && this.cssH === cssH && this.cachedDpr === this.dpr) return;
+    this.cssW = cssW;
+    this.cssH = cssH;
+    this.cachedDpr = this.dpr;
     this.canvas.style.width = `${cssW}px`;
     this.canvas.style.height = `${cssH}px`;
     this.canvas.width = Math.round(cssW * this.dpr);
@@ -108,6 +113,13 @@ export class FieldView {
     this.scale = cssW / VIEW_L;
     this.offsetX = PAD_IN * this.scale;
     this.offsetY = 0;
+    // Field geometry does not change during a replay. Rasterize it once per size/DPR change.
+    this.background = this.canvas.ownerDocument.createElement('canvas');
+    this.background.width = this.canvas.width;
+    this.background.height = this.canvas.height;
+    const backgroundCtx = this.background.getContext('2d');
+    backgroundCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.drawStatic(backgroundCtx);
   }
 
   px(x) {
@@ -120,7 +132,7 @@ export class FieldView {
 
   drawStatic(ctx) {
     const s = this.scale;
-    const W = this.canvas.clientWidth;
+    const W = this.cssW;
     const H = W * (GEO.W / VIEW_L);
     // Off-field first: the two ALLIANCE WALLs do not close the picture, because the OUTPOST and the
     // HUMAN PLAYER working it sit behind them (§5.9.2).
@@ -230,9 +242,9 @@ export class FieldView {
   drawFrame(frame, meta) {
     const ctx = this.ctx;
     const s = this.scale;
-    const W = this.canvas.clientWidth;
+    const W = this.cssW;
     const H = W * (GEO.W / VIEW_L);
-    this.drawStatic(ctx);
+    ctx.drawImage(this.background, 0, 0, this.cssW, this.cssH);
 
     // HUB active state (Table 6-3)
     for (const side of ['red', 'blue']) {
@@ -520,7 +532,7 @@ export class FieldView {
       { c: COLORS.fuel, t: 'A + on the intent letter (Sc+) means the roller is sweeping while it shoots or passes' },
       { c: '#fff6cf', t: 'The pale edge on a square ROBOT is a DUMPER\'s shooting face: only that side can score, so the car has to turn it to the HUB. A TURRET has no face — the barrel drawn over it tracks the HUB while the body drives wherever it likes' },
       { c: '#7fe3c0', t: 'The teal bar is the intake mouth, on whichever face the ROBOT card says. The car sweeps a pile by leading with that bar, so a rear intake backs into it and a side intake strafes — a tank drive cannot strafe, and then it only picks up what the side brushes past' },
-      { c: COLORS.fuel, t: 'A FUEL stream in flight is one line per shooter through the balls it has in the air, oldest first: straight when it fired standing still, curved when it fired on the move' },
+      { c: COLORS.fuel, t: 'A FUEL stream in flight is one line per shooter through the balls it has in the air, oldest first. Each ball flies at the point it comes down on, so a hopper emptied at the HUB face fans around the opening instead of drawing one line into the middle' },
     ];
   }
 }

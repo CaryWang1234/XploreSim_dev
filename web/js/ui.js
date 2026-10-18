@@ -5,6 +5,8 @@ import { SAMPLES, ARCHETYPES, MECHANISMS, STARTS, DRIVERS, CHASSIS, CHASSIS_OF, 
 import { DEFAULT_WEIGHTS } from './ai.js';
 import { FieldView } from './viz.js';
 import { PERIODS, periodSeconds } from './fastsim.js';
+import { createWorkerClient } from './worker-client.js';
+import { sampleReplay } from './replay.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -40,41 +42,13 @@ const state = {
   humanAcc: { red: 0.75, blue: 0.75 },
   // ROBOT indices the viewer asked to watch; empty means everyone at full strength.
   focus: new Set(),
+  busy: false,
 };
 
 // ---------------------------------------------------------------------------------------------
 // Worker plumbing
 // ---------------------------------------------------------------------------------------------
-let worker = null;
-const pending = new Map();
-let msgId = 0;
-
-function ensureWorker() {
-  if (worker) return worker;
-  worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-  worker.onmessage = (ev) => {
-    const { id, type, payload, ...rest } = ev.data || {};
-    const entry = pending.get(id);
-    if (!entry) return;
-    if (type === 'progress') {
-      entry.onProgress?.(payload);
-      return;
-    }
-    pending.delete(id);
-    if (type === 'error') entry.reject(new Error(payload));
-    else entry.resolve({ ...payload, ...rest });
-  };
-  worker.onerror = (e) => {
-    status(`Worker error: ${e.message}`, 'err');
-  };
-  return worker;
-}
-
-function ask(type, payload, onProgress) {
-  const id = ++msgId;
-  ensureWorker().postMessage({ id, type, payload });
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject, onProgress }));
-}
+const { ask, dispose: stopWorker } = createWorkerClient(() => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
 
 function status(text, kind = '') {
   const chip = $('chip-status');
@@ -83,16 +57,27 @@ function status(text, kind = '') {
 }
 
 function setProgress(show, frac = 0, label = '') {
+  const percent = Math.round(Math.max(0, Math.min(1, frac)) * 100);
   $('progress').hidden = !show;
-  $('progress-bar').style.width = `${Math.round(frac * 100)}%`;
+  $('progress').setAttribute('aria-valuenow', String(percent));
+  $('progress').setAttribute('aria-valuetext', label || `${percent}%`);
+  $('progress-bar').style.width = `${percent}%`;
   $('progress-label').textContent = label;
 }
 
 function busy(on) {
-  for (const id of ['btn-run', 'btn-mc', 'btn-bench', 'btn-train', 'btn-bench-recalc', 'btn-train-run']) {
+  state.busy = on;
+  $('btn-cancel').hidden = !on;
+  $('btn-cancel').disabled = !on;
+  for (const id of ['btn-run', 'btn-mc', 'btn-bench', 'btn-train', 'btn-bench-recalc', 'btn-train-run', 'btn-import']) {
     const b = $(id);
     if (b) b.disabled = on;
   }
+}
+
+function taskFailure(label, error) {
+  const cancelled = error.name === 'AbortError';
+  status(cancelled ? 'Task cancelled' : `${label}: ${error.message}`, cancelled ? '' : 'err');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -333,8 +318,9 @@ function renderRoster(side) {
 // header reading three teams over a one-ROBOT score would be the wrong count. Empty slots and
 // hand-edited profiles read "—" rather than silently reusing a preset number.
 function renderTeams() {
+  const rosters = replayRosters();
   for (const side of ['red', 'blue']) {
-    $(`teams-${side}`).textContent = state.rosters[side]
+    $(`teams-${side}`).textContent = rosters[side]
       .filter(onField)
       .map((p) => (p.team ? String(p.team) : '—'))
       .join(' · ');
@@ -343,8 +329,8 @@ function renderTeams() {
   // be visible next to the FIELD as well as in the header. The map handed to the canvas is the roster
   // that is actually on the field, because a recorded frame's order is the fielded order.
   view.setRoster({
-    red: state.rosters.red.filter(onField),
-    blue: state.rosters.blue.filter(onField),
+    red: rosters.red.filter(onField),
+    blue: rosters.blue.filter(onField),
   });
   renderLegend();
 }
@@ -352,6 +338,18 @@ function renderTeams() {
 // A ROBOT with `plays: false` is on the bench: not fielded, so it is not in the match, the replay or
 // the DRIVER STATION numbering.
 const onField = (p) => p.plays !== false;
+
+function replayRosters() {
+  if (state.result && state.lastPayload?.profilesRed && state.lastPayload?.profilesBlue) {
+    return { red: state.lastPayload.profilesRed, blue: state.lastPayload.profilesBlue };
+  }
+  if (state.result?.robotStats) {
+    return Object.fromEntries(['red', 'blue'].map((side) => [
+      side, state.result.robotStats.filter((robot) => robot.alliance === side),
+    ]));
+  }
+  return state.rosters;
+}
 
 function renderLegend() {
   const items = view.legend();
@@ -365,7 +363,7 @@ function renderLegend() {
   for (const side of ['red', 'blue']) {
     roster.push(`<span class="roster-side">${side === 'red' ? 'RED' : 'BLUE'}</span>`);
     let station = 0;
-    for (const p of state.rosters[side]) {
+    for (const p of replayRosters()[side]) {
       if (p.plays === false) continue;
       station += 1;
       const on = state.focus.has(idx);
@@ -397,6 +395,7 @@ function renderLegend() {
 const view = new FieldView($('field'));
 
 function renderPeriodStrip(schedule) {
+  hudPeriod = null;
   const host = $('period-strip');
   const segs = [{ p: 'AUTO', sec: TIME.autoSec }, { p: 'TRANSITION', sec: TIME.transitionSec }];
   for (let i = 1; i <= 4; i++) segs.push({ p: `SHIFT ${i}`, sec: TIME.shiftSec });
@@ -416,6 +415,12 @@ function renderPeriodStrip(schedule) {
     .join('');
   for (const seg of host.querySelectorAll('.seg')) {
     seg.addEventListener('click', () => goToTime(Number(seg.dataset.start)));
+    seg.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      event.stopPropagation();
+      seg.click();
+    });
   }
 }
 
@@ -526,17 +531,14 @@ function renderMarkers() {
 // Pausing on a jump is deliberate: the point of the jump is to LOOK at that moment.
 function goToTime(t) {
   if (!state.timeline || !state.timeline.length) return;
-  state.playing = false;
-  $('btn-play').textContent = 'Play';
+  pausePlayback();
   setFrame(anchorAt(t));
 }
 
 function stepFrames(n) {
   if (!state.timeline || !state.timeline.length) return;
-  state.playing = false;
-  $('btn-play').textContent = 'Play';
-  const max = state.timeline.length - 1;
-  setFrame(Math.max(0, Math.min(max, state.frame + n)));
+  // Keyboard steps are seconds, including recordings exported at a different anchor stride.
+  goToTime(state.playT + n * 0.1);
 }
 
 function jumpEvent(dir) {
@@ -584,31 +586,46 @@ function markHuman(frame, prevFrame, nextFrame) {
   return frame;
 }
 
+let hudFrame = null;
+let hudHub = '';
+let hudPeriod = null;
+
 function paintHud(f, t) {
   $('scrub').value = String(state.frame);
-  $('period-label').textContent = f.p;
-  $('timer-label').textContent = clock(TIME.matchSec - t);
+  const timer = $('timer-label');
+  const remaining = clock(TIME.matchSec - t);
+  if (timer.textContent !== remaining) timer.textContent = remaining;
+  if (hudFrame === f && hudPeriod === f.p) return;
+  hudFrame = f;
   // The audience display's key tell is which HUB is live, so the header answers that with a YELLOW
   // ARROW aimed at the ALLIANCE that can still score. Both arrows light while both HUBs are active
   // (AUTO / TRANSITION / END GAME), so the arrow only separates the two sides during the SHIFTs.
   const strip = $('hub-strip');
   const both = f.hub.red && f.hub.blue;
-  strip.className = `hub-strip ${both ? 'both' : f.hub.red ? 'red' : f.hub.blue ? 'blue' : 'none'}`;
-  strip.innerHTML =
+  const hubKey = both ? 'both' : f.hub.red ? 'red' : f.hub.blue ? 'blue' : 'none';
+  if (hudHub !== hubKey) {
+    hudHub = hubKey;
+    strip.className = `hub-strip ${hubKey}`;
+    strip.innerHTML =
     `<i class="ar${f.hub.red ? ' on' : ''}">◀</i>` +
     `<span>${both ? 'BOTH HUBS ACTIVE' : f.hub.red ? 'RED HUB ACTIVE' : f.hub.blue ? 'BLUE HUB ACTIVE' : 'BOTH HUBS OFF'}</span>` +
     `<i class="ar${f.hub.blue ? ' on' : ''}">▶</i>`;
+  }
   $('score-red').textContent = String(f.s.red.total);
   $('score-blue').textContent = String(f.s.blue.total);
   const delta = f.s.red.total - f.s.blue.total;
   const ml = $('margin-label');
   ml.textContent = delta === 0 ? 'TIE' : `${delta > 0 ? 'RED' : 'BLUE'} +${Math.abs(delta)}`;
   ml.className = `margin ${delta === 0 ? 'tie' : delta > 0 ? 'red' : 'blue'}`;
-  const foulWord = f.s.red.fouls === 1 ? 'foul' : 'fouls';
-  $('detail-red').textContent = `FUEL ${f.s.red.fuel} · TOWER ${f.s.red.tower} · +${f.s.red.fouls} from ${f.s.red.fouls} BLUE ${foulWord}`;
-  $('detail-blue').textContent = `FUEL ${f.s.blue.fuel} · TOWER ${f.s.blue.tower} · +${f.s.blue.fouls} from ${f.s.blue.fouls} RED ${foulWord}`;
-  for (const el of document.querySelectorAll('.period-strip .seg')) {
-    el.classList.toggle('cur', el.dataset.period === f.p);
+  // The recorder carries foul POINTS credited, not a count of opponent infractions.
+  $('detail-red').textContent = `FUEL ${f.s.red.fuel} · TOWER ${f.s.red.tower} · +${f.s.red.fouls} BLUE foul points`;
+  $('detail-blue').textContent = `FUEL ${f.s.blue.fuel} · TOWER ${f.s.blue.tower} · +${f.s.blue.fouls} RED foul points`;
+  if (hudPeriod !== f.p) {
+    hudPeriod = f.p;
+    $('period-label').textContent = f.p;
+    for (const el of document.querySelectorAll('.period-strip .seg')) {
+      el.classList.toggle('cur', el.dataset.period === f.p);
+    }
   }
 }
 
@@ -694,7 +711,25 @@ function clock(sec) {
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 }
 
+function pausePlayback() {
+  cancelAnimationFrame(state.raf);
+  state.raf = 0;
+  state.playing = false;
+  state.lastTs = 0;
+  $('btn-play').textContent = 'Play';
+}
+
+function startPlayback() {
+  pausePlayback();
+  if (!state.timeline?.length) return;
+  if (state.playT >= state.timeline[state.timeline.length - 1].t) setFrame(0);
+  state.playing = true;
+  $('btn-play').textContent = 'Pause';
+  state.raf = requestAnimationFrame(animate);
+}
+
 function animate(ts) {
+  state.raf = 0;
   if (!state.playing) return;
   if (!state.lastTs) state.lastTs = ts;
   const dt = Math.min(0.25, (ts - state.lastTs) / 1000);
@@ -704,8 +739,7 @@ function animate(ts) {
   if (state.playT >= end) {
     state.playT = end;
     drawAt(end);
-    state.playing = false;
-    $('btn-play').textContent = 'Play';
+    pausePlayback();
     return;
   }
   drawAt(state.playT);
@@ -734,7 +768,7 @@ function payload(extra = {}) {
     profilesBlue: state.rosters.blue,
     weights: state.weights,
     seed: Number($('inp-seed').value) || 20260110,
-    iterations: Number($('inp-iter').value) || 200,
+    iterations: Math.max(1, Math.round(Number($('inp-iter').value) || 200)),
     scenarioOverride: scenarioOverride(),
     ...extra,
   };
@@ -906,6 +940,7 @@ const INTENT_LABEL = {
 // "distribution" of one sample.
 function renderResult(res, ctx = {}) {
   state.result = res;
+  renderTeams();
   const r = res;
   const matches = r.matches || ctx.matches || 1;
   const seed = ctx.seed == null ? '—' : ctx.seed;
@@ -1006,6 +1041,8 @@ const DIFF_LABEL = {
   humanAcc: "the HUMAN PLAYER's accuracy",
   red: 'the red ROBOTs',
   blue: 'the blue ROBOTs',
+  weights: 'the policy weights',
+  iterations: 'the search budget',
 };
 
 function renderBatchDelta(r, ctx) {
@@ -1215,8 +1252,9 @@ function renderInsights(r) {
 
   // Never advise a climb the selected ROBOTs physically cannot make: top-tier ROBOTs this season
   // mostly do not climb, and suggesting "two AUTO L1 + one L2 gets you there" would be nonsense.
-  const aiRoster = ((r.plan && state.rosters[r.plan.side]) || []).filter((p) => p.climb && (p.climb.l1 || p.climb.l2 || p.climb.l3));
-  const aiMaxClimb = ((r.plan && state.rosters[r.plan.side]) || []).reduce(
+  const profiles = ((r.plan && replayRosters()[r.plan.side]) || []).filter(onField);
+  const aiRoster = profiles.filter((p) => p.climb && (p.climb.l1 || p.climb.l2 || p.climb.l3));
+  const aiMaxClimb = profiles.reduce(
     (m, p) => Math.max(m, p.climb && p.climb.l3 ? 3 : p.climb && p.climb.l2 ? 2 : p.climb && p.climb.l1 ? 1 : 0),
     0,
   );
@@ -1489,32 +1527,33 @@ function renderRules() {
     ['Semifinals SF1 / SF2', '7407 / 5940 / 9470', '443', '868 / 2910 / 2046', '665'],
   ];
   const simRows = [
-    ['Engine throughput (greedy vs greedy, neither side defending; scripts/probe.mjs, n=12)', '5.44 FUEL/s per alliance', 'real finals ≈4.7 FUEL/s. One trio (254/1678/1690) on both ALLIANCES, which scored 624.8 as red and 612.8 as blue on the same 12 MATCHes'],
-    ['Engine total per alliance (the GREEDY mirror: the hand-written cycling plan on both sides, nobody defending, n=24 ×2 seed sets ×2 trios)', '615.7 (611.3 and 620.1)', 'this is the calibration anchor: 1.8% under the real Einstein average of 627. A mirror means the same three ROBOTs on both sides — it used to be one trio per side, which made every mirror a roster comparison. Both trios are run separately and pooled. Read one mirror as ±2%. scripts/mirror.mjs'],
-    ["The AI's own searched mirror (the same MATCHes)", '606.2 (592.5 and 619.9)', '10 points under the greedy mirror: in a mirror both sides deny each other and the denial cancels, but the search still pays for thinking about it'],
-    ['The same plan PINNED to all-SCORE (the search is not consulted, nobody defends)', '662.0 (629.7 and 694.3)', 'what the search spends on DEFEND, given back without changing the policy the ROBOTs actually fly'],
-    ['The AI against greedy (four disjoint seed families, n=96; scripts/ab.mjs)', '79.7% win, 667.2 against 623.6', 'per family 87.5 / 81.3 / 79.2 / 70.8%. Pinning every ROBOT to "always cycle" drops it to 57.8% and 26.3 of margin, so the macro search is worth +21.9 win points while costing 11.3 of its own score: it buys denial with raw FUEL. Taking DEFEND out of the micro policy costs another 8.3 win points, so the denial it pays for is real. Two earlier builds published 39.1% and 26.3% for this number and both were wrong in the same direction — the AI was always dealt 254/1678/1690 and its opponent always drove 4414/5940/11019, which on the same policy is a 59.8-point roster difference'],
-    ['Seat test: the same trio on both sides, red minus blue per MATCH (scripts/mirror.mjs)', 'greedy mirror −1.3 ± 7.2 · pinned mirror +15.2 ± 5.3', '96 MATCHes per mode. The calibration anchor is symmetric (0.2 sem), so there is no seat advantage to price and none of the numbers on this page carries one. The mirror that flies the shipped micro policy still splits 15 points, about 2.9 sem, and scripts/seat.mjs is the tool that localises it — the engine ordering was found that way and fixed, and this remainder is not yet. The page previously claimed red and blue were 60 points apart: that was the two sample rosters, and red was not a seat but a weaker set of machines'],
-    ['Being the AUTO loser is worth about +30 points (scripts/seat.mjs, pinned same-roster mirror, n=16 per arm)', 'red pinned as AUTO winner: red−blue −43.0 ± 6.2 · blue pinned: +24.8 ± 11.0', 'Table 6-3 makes the AUTO winner sit out SHIFT 1 and SHIFT 3, so it plays SHIFT 2 and SHIFT 4 against a FUEL pool the opponent has already been eating from — the loser collects 35 to 50 more FUEL. The other sample trio reads −53.3 and +7.8 for the same two arms: same signs, different sizes. The search has found this on its own: against greedy it scores 55.7 AUTO FUEL where greedy scores 71.5, and it takes AUTO in only 25% of those MATCHes. Note which way the arrow points in each experiment: in the mirror the winner is PINNED, so the 30 points are the window; in a real MATCH winning AUTO is a symptom of a good AUTO, and the two effects run opposite'],
-    ['The engine serves the two ALLIANCES alternately', 'two identical greedy policies: 598.6 vs 630.5 before, 611.0 vs 615.6 after', 'red ROBOTs are built first, so a plain per-ROBOT pass let red take every contested FUEL and name its piles first. That was worth about 30 points between two identical plans, and a mirror is now symmetric by construction rather than by luck. The per-tick order is not enough on its own: decisions happen every 0.2 s, so the ALLIANCE that decides first has to alternate on that clock, not on the tick'],
-    ['What one defender in a shooting lane costs the attacker (scripts/defcal.mjs, both plans pinned so no search is involved, n=48 per arm per trio)', 'factor 0.923 / 0.935 at one defender · 0.819 / 0.870 at two · 0.695 / 0.779 at three', 'the geometric event the analytic model has no representation of. Launches the attacker loses to a body in its lane go 6 → 24 → 45 → 99 a MATCH with 0, 1, 2, 3 defenders, so the marginal defender is worth about as much as the first — fastsim.js now charges defence per defender rather than one factor for the strongest one. The two trios also say the ×skill term is unproven: the higher-skill trio suppressed 1.5% LESS'],
-    ['…and what happened when the search was told that number', 'win −9.9 pts · score −14.1 · margin −8.9 (n=96, four families)', 'defenseEfficacy went back to 0. The mix shows why: the AI dark-window DEFEND share rose 16.1% → 26.6% and COLLECT fell 63.3% → 54.9%, so the search bought the defence it could suddenly see. The model prices what a defender takes from the opponent correctly and under-prices what it costs its own side — defending during your own inactive window looks nearly free when that ROBOT could not score anyway, but the engine loses the whole bank it would have carried into the next window. A half-priced play is worse than an unpriced one'],
-    ['Re-measuring the come-home rung (ARMS=base,noDarkPrep, n=96, four families)', 'win −10.9 pts · score −18.1 · margin −10.7 when it is off', 'darkPrepSec = 4 s is the single most valuable time rule in the policy, and all four seed families move the same way. A two-family sample earlier in the build read −9.4 / −13.3 / −17.3 — same direction, smaller size. Doubling the lead to 8 s gains 1.6 win points and gives back 3.2 of score'],
-    ['A stricter time rule that lost on the score while winning on the proxy', 'FUEL caught off its own lane at a reopen 37.8% → 14.3%, win −5.7 pts (n=96)', 'gating the dark-window sweep on whether the pickup AND the return fit in the time left did exactly what it looks like it should, and every one of the four families went down or flat (87.5→79.2, 81.3→75.0, 79.2→70.8, 70.8→70.8). Reverted. What the AI does with the clock it already has is fine: on the tail of a live window it leaves 1.5% of frames in an unfinished trip where greedy leaves 2.0%, and is caught holding 14.0 FUEL at a window close where greedy holds 21.4 — scripts/cap.mjs prints both'],
-    ['Teamwork weight mateSeparation, ablated at n=96 (SWEEP="mateSeparation:0")', '0.6 ships; removing it moves win +0.5, score +0.5, margin +1.7', 'prices a candidate pile down for having a partner near it, at the partner\'s body or at the target the partner is already driving at; the penalty dies at 72 in, about two car widths. On this build the ablation does not pay for itself on any statistic, so it ships because three ROBOTs converging on one pile is a real failure mode the cameras show, not because a 96-MATCH sample priced it. scripts/team.mjs prints the bunching proxies'],
-    ['The macro search now re-runs inside a SHIFT when the situation changes class', '7 searches a MATCH against a steady opponent, 8 against a random one; win rate unchanged at 79.7%', 'the trigger fires on a ROBOT going down, the FIELD running out of FUEL, an assigned role becoming unexecutable, or the opponent posterior moving to another archetype. Against greedy it essentially never fires and the replay is identical to the previous build to a frame — which is the honest statement: a plan made against a steady opponent is not invalidated by anything that happens next. Cost when it does fire is one extra search'],
-    ['Same mirror with hard-contact fouls on (sc.contactFouls = true: §7.4.4 G415/G416/G417)', 'AI mirror 619.5 on against 616.4 off (n=48 per arm, both trios)', '3 points, inside the ±2% a mirror carries, and the greedy mirror does not move at all because the hand-written cycling plan never makes a deliberate hit. The card is not priced — a second YELLOW CARD in a phase is a RED CARD, i.e. a DISQUALIFICATION, and that tournament cost is not modelled (see Hard contact between ROBOTS)'],
+    ['Engine throughput (greedy vs greedy, neither side defending; scripts/probe.mjs, n=12)', '5.34 FUEL/s per alliance', 'real finals ≈4.7 FUEL/s. One trio (254/1678/1690) on both ALLIANCES, which scored 600.1 as red and 614.3 as blue on the same 12 MATCHes'],
+    ['Engine total per alliance (the GREEDY mirror: the hand-written cycling plan on both sides, nobody defending, n=24 ×2 seed sets ×2 trios)', '593.4 (601.1 and 585.7)', 'this is the calibration anchor: 5.4% under the real Einstein average of 627, which is outside the ±2% a mirror is read in and is stated rather than tuned back. A mirror means the same three ROBOTs on both sides — it used to be one trio per side, which made every mirror a roster comparison. Both trios are run separately and pooled. scripts/mirror.mjs'],
+    ["The AI's own searched mirror (the same MATCHes)", '565.2 (541.0 and 589.3)', '28 points under the greedy mirror: in a mirror both sides deny each other and the denial cancels, but the search still pays for thinking about it'],
+    ['The same plan PINNED to all-SCORE (the search is not consulted, nobody defends)', '639.5 (602.2 and 676.7)', 'what the search spends on DEFEND, given back without changing the policy the ROBOTs actually fly. It sits above the greedy mirror because a pinned car never leaves the HUB face to chase a pile'],
+    ['The AI against greedy (four disjoint seed families, n=96; scripts/ab.mjs)', '65.1% win, 648.1 against 617.0', 'per family 66.7 / 70.8 / 58.3 / 64.6%. Pinning every ROBOT to "always cycle" (noSearch) drops it to 54.2% and 14.9 of margin, so the macro search is worth +10.9 win points while costing 16.6 of its own score: it buys denial with raw FUEL. Taking DEFEND out of the micro policy now reads +5.7 win points, the fourth build running in a row that this arm has come out positive — the denial is real against a baseline that cannot cancel it, but the price the search pays for it is within a hair of what it returns. Switching the shot dispersion off (sc.shotSpreadIn = 0) is worth +9.9 win points, +10.8 of score and +18.9 of margin: a fan of loose FUEL around the HUB helps the machine that only cycles more than it helps the one that plans'],
+    ['Seat test: the same trio on both sides, red minus blue per MATCH (scripts/mirror.mjs)', 'greedy mirror −2.7 ± 6.2 · pinned mirror +22.5 ± 7.3', '96 MATCHes per mode. The calibration anchor is symmetric (0.4 sem), so the score the page is calibrated on carries no seat advantage. The mirror that flies the shipped micro policy still splits 22 points, about 3.1 sem, and scripts/seat.mjs is the tool that localises it. This number has now read +15.2, then +27.7, then +9.7 and back to +22.5 across four builds — it moves when the FUEL-drop geometry moves, which is the honest description of what is left here: a seat effect that is not yet localised, not a settled +22. The page previously claimed red and blue were 60 points apart: that was the two sample rosters, and red was not a seat but a weaker set of machines'],
+    ['Being the AUTO loser is worth a lot, and how much depends on the trio (scripts/seat.mjs, pinned same-roster mirror, 24 MATCHes per arm)', 'trio 254/1678/1690: red pinned as AUTO winner −31.6 ± 11.2, blue pinned +55.4 ± 8.3 · trio 4414/5940/11019: −62.4 ± 9.8 and +81.8 ± 10.6', 'Table 6-3 makes the AUTO winner sit out SHIFT 1 and SHIFT 3, so it plays SHIFT 2 and SHIFT 4 against a FUEL pool the opponent has already been eating from. Both trios say the same sign in both seatings. The search does not seem to be buying this: it scores 92.4 AUTO FUEL against greedy 100.7 on the probe mirror (n=12), which is the wrong end of the ledger to be arguing from, so the claim is left as the pinned-mirror measurement only'],
+    ['The engine serves the two ALLIANCES alternately (measured on the build that fixed it, not re-run since)', 'two identical greedy policies: 598.6 vs 630.5 before, 611.0 vs 615.6 after', 'red ROBOTs are built first, so a plain per-ROBOT pass let red take every contested FUEL and name its piles first. That was worth about 30 points between two identical plans, and a mirror is now symmetric by construction rather than by luck. The per-tick order is not enough on its own: decisions happen every 0.2 s, so the ALLIANCE that decides first has to alternate on that clock, not on the tick. On this build the greedy mirror reads −2.7 ± 6.2 red minus blue, which is the row above and the reason this fix is not re-tested every round'],
+    ['What one defender in a shooting lane costs the attacker (scripts/defcal.mjs, both plans pinned so no search is involved, n=48 per arm per trio)', 'factor 0.923 / 0.933 at one defender · 0.784 / 0.815 at two · 0.689 / 0.752 at three', 'the geometric event the analytic model has no representation of. Launches the attacker loses to a body in its lane go 19 → 50 → 82 → 112 a MATCH on the first trio and 37 → 111 → 165 → 190 on the second, so the marginal defender is worth about as much as the first — fastsim.js now charges defence per defender rather than one factor for the strongest one. A FUEL now flies at a landing point rather than at the HUB centre, which shortens the segment a defender has to stand in front of, and the two trios still land within 6 points of a percent of each other at every k. The trio with the better drivers suppresses LESS per defender (0.620 defenseSkill costs 7.7% a car, 0.860 costs 6.7%), which is the same unproven ×skill term as before'],
+    ['…and what happened when the search was told that number (measured on the build that set defenseEfficacy to 0)', 'win −9.9 pts · score −14.1 · margin −8.9 (n=96, four families)', 'defenseEfficacy went back to 0 and the ablation of it is now a no-op on this build: the noShotSpread-controlled A/B re-ran defenseEfficacyZero at family 90001 and it moved nothing at all (win 0.0, score 0.0), which is what a shipped zero should look like. The mix showed why the told version lost: the AI dark-window DEFEND share rose 16.1% → 26.6% and COLLECT fell 63.3% → 54.9%, so the search bought the defence it could suddenly see. The model prices what a defender takes from the opponent correctly and under-prices what it costs its own side'],
+    ['Re-measuring the come-home rung (ARMS=base,noDarkPrep, n=96, four families)', 'win −3.6 pts · score −8.4 · margin −13.1 when it is off', 'darkPrepSec = 4 s is the rule that makes a carrying ROBOT come home before our HUB goes live. On the build before this one it read −10.9 / −18.1 / −10.7 with all four families moving the same way; now it is 0.0 / 0.0 / +4.2 / −18.8 win points by family (base 66.7, 70.8, 58.3, 64.6 against noDarkPrep 66.7, 70.8, 62.5, 45.8). Two families are untouched by the rule, one prefers it off, and the pooled number is carried by a single family. The margin still says the rung is worth having (+13.1), but "every family moves the same way" is no longer true and is not claimed'],
+    ['A stricter time rule that lost on the score while winning on the proxy (measured on the build that rejected it, not re-run since)', 'FUEL caught off its own lane at a reopen 37.8% → 14.3%, win −5.7 pts (n=96)', 'gating the dark-window sweep on whether the pickup AND the return fit in the time left did exactly what it looks like it should, and every one of the four families went down or flat (87.5→79.2, 81.3→75.0, 79.2→70.8, 70.8→70.8). Reverted. What the AI does with the clock it already has is fine: on the tail of a live window it leaves 1.5% of frames in an unfinished trip where greedy leaves 2.0%, and is caught holding 14.0 FUEL at a window close where greedy holds 21.4 — scripts/cap.mjs prints both'],
+    ['Teamwork weight mateSeparation, ablated at n=96 (SWEEP="mateSeparation:0")', '0.6 ships; removing it moves win +5.2, score −1.7, margin +6.8', 'prices a candidate pile down for having a partner near it, at the partner\'s body or at the target the partner is already driving at; the penalty dies at 72 in, about two car widths. The last build read +0.5 / +0.5 / +1.7 for the same ablation, i.e. indistinguishable from nothing; this one says removing it wins 5.2 more MATCHes out of 96 (1.3 sem, still not significant) while scoring 1.7 LESS. Neither sample prices the weight, and the two samples do not even agree on which side of zero it sits. It ships because three ROBOTs converging on one pile is a real failure mode the cameras show, not because a 96-MATCH sample priced it. scripts/team.mjs prints the bunching proxies'],
+    ['The macro search now re-runs inside a SHIFT when the situation changes class (search counts from the build that added it)', '7 searches a MATCH against a steady opponent, 8 against a random one; the win rate it was quoted against is now 65.1%', 'the trigger fires on a ROBOT going down, the FIELD running out of FUEL, an assigned role becoming unexecutable, or the opponent posterior moving to another archetype. Against greedy it essentially never fires, which is the honest statement: a plan made against a steady opponent is not invalidated by anything that happens next. Cost when it does fire is one extra search'],
+    ['Same mirror with hard-contact fouls on (sc.contactFouls = true: §7.4.4 G415/G416/G417)', 'AI mirror 579.7 on against 565.2 off (n=48 per arm, both trios)', '14.5 points, above the ±2% a mirror carries, and in the direction the foul points: the fouls are awarded to the opponent, so both ALLIANCES gain. The greedy mirror is not re-run with the switch because the hand-written cycling plan never makes a deliberate hit — that is a property of the policy, not a measurement. The card is not priced: a second YELLOW CARD in a phase is a RED CARD, i.e. a DISQUALIFICATION, and that tournament cost is not modelled'],
     ['Foul points are charged to the ROBOT that committed them', 'G418, G419 and G415/G416/G417 used to credit the offending side', 'the engine logged the offender all along and the arithmetic handed it the points. The Numbers tab now lists every foul with its second, its clause and the machine, the batch view averages the same per ROBOT, and the chips under the scoreboard jump the replay to them'],
-    ['Intake mouth: a slot across the whole face, reaching 6 in behind the face line', 'sc.intakeReach 5 → 594.1 · 6 → 615.7 · 7 → 612.9 · 8 → 617.6 · 10 → 625.8 · 12 → 632.1', 'the width is the car and is not a guess; how far BEHIND the face line the rollers still grab is, and the greedy mirror (192 MATCHes per point) is what watches it. Twelve inches is worth 16 points more than the six that ship, and would overshoot the real average of 627, so six is stated as an estimate of what a ball caught against a bumper is and pinned by scripts/golden.mjs rather than asserted as a rule. Back is the default face on every card because a Front slot shares its bumper with a front-mounted Dumper shooter, not because the mirror pays for it (see the intake face row)'],
-    ['Chassis, on the pinned all-SCORE mirror (n=24 ×2 seed sets; scripts/lever.mjs)', 'swerve 629.7 · mecanum 549.2 · tank 446.2', 'a square ROBOT has to rotate its shooting face onto the HUB, so turn rate is a cycle-time number: a tank drive costs 184 points, 29%. Mecanum sits 80 behind a swerve, because the rear mouth is the end that has to arrive first and a mecanum reverse leg runs at 78% of top speed'],
-    ['Mechanism, same mirror', 'turret 685.2 · dumper 591.3', 'a 94-point gap: the turret slews independently and fires on the move, so a slow chassis does not slow its aim; a Dumper has one shooting face and has to point the whole car at the HUB (see Turret or Dumper)'],
-    ['Intake face, same mirror (front / back / left / right; scripts/lever.mjs ONLY=intake)', 'swerve 626.6 · 629.7 · 627.9 · 623.9 — tank 446.6 · 446.2 · 397.8 · 407.3', 'a swerve strafes and spins at full rate, so it can lead with any face and the 5.8-point spread is inside the noise. A tank has no strafe and side mouths cost 39 to 49 points — but front and back are now the same number (0.4 apart), which is the honest answer: the rear mouth was measured worth +20 on the previous layout, and that gain was the asymmetric NEUTRAL ZONE pile, not the face. What still argues for Back is a Front slot sharing its bumper with a front-mounted Dumper shooter'],
-    ['DRIVER level, same mirror (Average is the reference the page is built on)', 'rookie 559.3 · average 629.7 · good 641.7 · elite 656.9', '98 points end to end (Table 6-1 DRIVER), and every rung pays on this build: good to elite is 15.2, above the spread between the two seed sets, where the previous ladder stopped paying after a competent driver'],
-    ['Same mirror with one ROBOT a side (the bench switch: plays: false, a 1v1)', '300.9 against 629.7 for 3v3', 'a lone ROBOT recovers 48% of its three-ROBOT ALLIANCE; FUEL staging is unchanged (§6.3.4), and this is not a legal MATCH configuration'],
-    ['Loose FUEL on the field (drawn every frame, no sampling)', 'mean 226, min 146', '504 staged = 24/DEPOT + 24/CHUTE + ≤8 preload per ROBOT + the rest midfield (§6.3.4)'],
-    ['Roller independent of the shooter: it picks up during SCORE / PASS', '14% of the 97822 ticks the roller runs swallow a FUEL (n=12)', 'those ticks include SCORE and PASS, not just INTAKE. Bulldozing turns the roller off on purpose, or it would collect what it means to push away'],
-    ['Calibration knob: HUB outlet throughput cap (four outlets, §5.4)', '4.2 FUEL/s', 'backed out from the real average and re-derived after the midfield layout was made symmetric: the same 192-MATCH mirror gives 598.6 at 4.0, 615.7 at 4.2, 614.7 at 4.4 and 622.5 at 4.6. Past 4.2 the mean stops moving while the mirror opens a side gap (−14.8 at 4.4, −21.9 at 4.6) that is not yet explained, so the cap stops where the MATCHes still score evenly'],
-    ['FUEL scored in AUTO', '≈83 (81.0 red, 85.8 blue, n=12)', 'real finals 111–177, so the engine is low here'],
+    ['Intake mouth: a slot across the whole face, reaching 6 in behind the face line', 'sc.intakeReach 5 → 581.7 · 6 → 593.4 · 8 → 605.5 · 12 → 611.0', 'the width is the car and is not a guess; how far BEHIND the face line the rollers still grab is, and the greedy mirror (192 MATCHes per point) is what watches it. Twelve inches is worth 17.6 points more than the six that ship and would still leave the anchor 2.5% under the real average, so six is stated as an estimate of what a ball caught against a bumper is and pinned by scripts/golden.mjs rather than asserted as a rule. Back is the default face on every card because a Front slot shares its bumper with a front-mounted Dumper shooter, not because the mirror pays for it (see the intake face row)'],
+    ['Chassis, on the pinned all-SCORE mirror (n=24 ×2 seed sets; scripts/lever.mjs)', 'swerve 602.2 · mecanum 540.9 · tank 439.2', 'a square ROBOT has to rotate its shooting face onto the HUB, so turn rate is a cycle-time number: a tank drive costs 163 points, 27%. Mecanum sits 61 behind a swerve, because the rear mouth is the end that has to arrive first and a mecanum reverse leg runs at 78% of top speed'],
+    ['Mechanism, same mirror', 'turret 653.7 · dumper 569.1', 'an 84.6-point gap, and it narrowed by 9 the moment shots were given a dispersion: a Dumper parked at the face now loses some of its own misses to the fan, while a turret fires on the move and recovers them. The turret still slews independently and never has to point the car at the HUB (see Turret or Dumper)'],
+    ['Intake face, same mirror (front / back / left / right; scripts/lever.mjs ONLY=intake)', 'swerve 611.2 · 602.2 · 602.6 · 597.3 — tank 440.2 · 439.2 · 400.3 · 390.0', 'a swerve strafes and spins at full rate, so the 13.9-point spread across its four faces is small next to what a tank pays: side mouths cost it 40 to 50 points. Front is 9.0 ahead of Back on a swerve this build, where the last one had them equal to within 0.4 — the two are inside each other\'s error bar and neither is an argument. What still argues for Back is a Front slot sharing its bumper with a front-mounted Dumper shooter'],
+    ['DRIVER level, same mirror (Average is the reference the page is built on)', 'rookie 517.6 · average 602.2 · good 617.4 · elite 638.3', '120.7 points end to end (Table 6-1 DRIVER), and every rung pays on this build: good to elite is 20.9, above the spread between the two seed sets'],
+    ['Same mirror with one ROBOT a side (the bench switch: plays: false, a 1v1)', '299.6 against 602.2 for 3v3', 'a lone ROBOT recovers 50% of its three-ROBOT ALLIANCE; FUEL staging is unchanged (§6.3.4), and this is not a legal MATCH configuration'],
+    ['Loose FUEL on the field (drawn every frame, no sampling)', 'mean 225, min 144', '504 staged = 24/DEPOT + 24/CHUTE + ≤8 preload per ROBOT + the rest midfield (§6.3.4)'],
+    ['Roller independent of the shooter: it picks up during SCORE / PASS', '14% of the 98234 ticks the roller runs swallow a FUEL (n=12)', 'those ticks include SCORE and PASS, not just INTAKE. Bulldozing turns the roller off on purpose, or it would collect what it means to push away'],
+    ['A launch flies at a landing point, not at the HUB centre (shot dispersion)', 'anchor unmoved (594.7 → 593.4); the AI gives 9.9 win points and greedy gains 8.2', 'Every FUEL used to be aimed at the exact centre and one accuracy roll decided whether that counted as made, so a whole hopper drew as a single line into the middle of the HUB and a miss came down on a separate random draw up to 68 in from where the replay had shown it flying. A launch now picks a landing point: inside the 41.7 in opening when the roll says made (§5.4), at or past the 47 in prism footprint on the shooter\'s own half when it says missed, because §5.4 makes the HUB a solid structure with the hole on top. scripts/verify.mjs holds both halves: 26 landings measured, 0 outside one flight step plus a ball width, worst 2.6 in — and with sc.shotSpreadIn = 0 the same walk is outside the bound on 31 of 36 landings, worst 62.6 in. The spread is swept at n=192 per point (0 → 594.7, 12 → 590.3, 22 → 593.4, 30 → 593.7), which is flat inside the mirror\'s own error bar, so 22 in is stated as an estimate and not a value tuned against the anchor'],
+    ['Calibration knob: HUB outlet throughput cap (four outlets, §5.4)', '4.2 FUEL/s', 'backed out from the real average and re-derived after the midfield layout was made symmetric. Re-swept on this build (n=192 each): 4.2 → 593.4, 4.6 → 600.6, 5.0 → 616.3, 5.2 → 613.4, with the red-blue split inside one standard error at every point. So 5.0 would put the anchor 1.7% under the real average — back inside the ±2% — and it is not shipped: the cap has no independent measurement, every figure on this page is anchored on it, and moving a calibration knob to erase the cost of a rule change is how a simulator stops meaning anything'],
+    ['FUEL scored in AUTO', '≈97 (92.4 red, 100.7 blue, n=12)', 'real finals 111–177, so the engine is still low here, and less low than the previous build measured'],
   ];
   $('calib-table').innerHTML =
     `<thead><tr><th>Match / metric</th><th>Red</th><th class="mono">Red score</th><th>Blue</th><th class="mono">Blue score</th></tr></thead>` +
@@ -1601,6 +1640,8 @@ function batchSnapshot() {
     humanAcc: JSON.stringify(sc.humanAccuracy),
     red: JSON.stringify(state.rosters.red),
     blue: JSON.stringify(state.rosters.blue),
+    weights: JSON.stringify(state.weights),
+    iterations: String(payload().iterations),
   };
 }
 
@@ -1627,7 +1668,7 @@ function runCtx(matches) {
 // 150 in/s covers 60 in between two of them, which trips blendFrame's teleport guard and reads as
 // jumping; 0.2 s keeps it under the threshold and the file at ~3 MB.
 const MATCH_FORMAT = 'xplore-match-v1';
-const EXPORT_STRIDE = 2;
+const EXPORT_INTERVAL_SEC = 0.2;
 
 function exportMatch() {
   const res = state.result;
@@ -1636,14 +1677,12 @@ function exportMatch() {
     status('Nothing to export yet — run One match or a Monte-Carlo batch first.', 'err');
     return;
   }
-  const frames = [];
-  for (let i = 0; i < tl.length; i += EXPORT_STRIDE) frames.push(tl[i]);
-  if ((tl.length - 1) % EXPORT_STRIDE) frames.push(tl[tl.length - 1]);
+  const frames = sampleReplay(tl, EXPORT_INTERVAL_SEC);
   const { timeline, recorded, ...result } = res;
   const file = {
     format: MATCH_FORMAT,
     exportedAt: new Date().toISOString(),
-    strideSec: +(0.1 * EXPORT_STRIDE).toFixed(2),
+    strideSec: +(frames[1].t - frames[0].t).toFixed(3),
     ctx: state.lastCtx || {},
     inputs: state.lastPayload || null,
     result,
@@ -1680,9 +1719,7 @@ function importMatch(text, label) {
     status(`${label} has no frame log in it — export the MATCH, not just the summary.`, 'err');
     return;
   }
-  cancelAnimationFrame(state.raf);
-  state.playing = false;
-  $('btn-play').textContent = 'Play';
+  pausePlayback();
   state.timeline = data.frames;
   state.lastCtx = data.ctx || {};
   state.lastPayload = data.inputs || null;
@@ -1699,6 +1736,7 @@ function importMatch(text, label) {
 }
 
 async function runSingle() {
+  if (state.busy) return;
   busy(true);
   state.lastRun = 'single';
   const opp = opponentPick();
@@ -1706,21 +1744,20 @@ async function runSingle() {
   setProgress(true, 0.1, 'AI is searching shift plans');
   try {
     const p = payload({ matches: 1, recordFirst: true, mode: opp.mode, opponentKind: opp.kind, aiSide: plannedSide(), planSnapshot: true });
-    state.lastPayload = p;
+    const inputs = structuredClone(p);
+    const ctx = runCtx(1);
     const res = await ask('mc', p);
+    pausePlayback();
+    state.lastPayload = inputs;
     state.timeline = res.timeline;
-    state.lastCtx = runCtx(1);
+    state.lastCtx = ctx;
     $('scrub').max = String(Math.max(0, (res.timeline ? res.timeline.length : 1) - 1));
     renderResult(res, state.lastCtx);
     setFrame(0);
-    state.playing = true;
-    state.lastTs = 0;
-    $('btn-play').textContent = 'Pause';
-    cancelAnimationFrame(state.raf);
-    state.raf = requestAnimationFrame(animate);
+    startPlayback();
     status('Match done', 'ok');
   } catch (e) {
-    status(`Match failed: ${e.message}`, 'err');
+    taskFailure('Match failed', e);
   } finally {
     busy(false);
     setProgress(false);
@@ -1728,7 +1765,8 @@ async function runSingle() {
 }
 
 async function runMonteCarlo() {
-  const matches = Math.max(10, Math.min(600, Number($('inp-mcmatches').value) || 120));
+  if (state.busy) return;
+  const matches = Math.round(Math.max(10, Math.min(600, Number($('inp-mcmatches').value) || 120)));
   const opp = opponentPick();
   busy(true);
   state.lastRun = 'batch';
@@ -1736,20 +1774,23 @@ async function runMonteCarlo() {
   setProgress(true, 0, '0%');
   try {
     const p = payload({ matches, recordFirst: true, mode: opp.mode, opponentKind: opp.kind, aiSide: plannedSide() });
-    state.lastPayload = p;
+    const inputs = structuredClone(p);
+    const ctx = runCtx(matches);
     const res = await ask(
       'mc',
       p,
       (pp) => setProgress(true, pp.done / pp.total, `${pp.done}/${pp.total}`),
     );
+    pausePlayback();
+    state.lastPayload = inputs;
     state.timeline = res.timeline;
-    state.lastCtx = runCtx(matches);
+    state.lastCtx = ctx;
     $('scrub').max = String(Math.max(0, (res.timeline ? res.timeline.length : 1) - 1));
     renderResult(res, state.lastCtx);
     setFrame(0);
     status(`Monte Carlo done (${matches} matches)`, 'ok');
   } catch (e) {
-    status(`Batch failed: ${e.message}`, 'err');
+    taskFailure('Batch failed', e);
   } finally {
     busy(false);
     setProgress(false);
@@ -1757,6 +1798,7 @@ async function runMonteCarlo() {
 }
 
 async function runBench() {
+  if (state.busy) return;
   busy(true);
   status('Running baselines…', 'busy');
   setProgress(true, 0.05, 'Random / fill-and-fire / greedy');
@@ -1769,7 +1811,7 @@ async function runBench() {
     renderBench(res);
     status('Baselines done', 'ok');
   } catch (e) {
-    status(`Baselines failed: ${e.message}`, 'err');
+    taskFailure('Baselines failed', e);
   } finally {
     busy(false);
     setProgress(false);
@@ -1777,6 +1819,7 @@ async function runBench() {
 }
 
 async function runTrain() {
+  if (state.busy) return;
   const budget = Math.max(5, Math.min(120, Number($('inp-train-budget').value) || 30)) * 1000;
   busy(true);
   status('Self-play tuning…', 'busy');
@@ -1790,7 +1833,7 @@ async function runTrain() {
     renderTrain(res);
     status('Training done (re-verify it)', 'ok');
   } catch (e) {
-    status(`Training failed: ${e.message}`, 'err');
+    taskFailure('Training failed', e);
   } finally {
     busy(false);
     setProgress(false);
@@ -1798,6 +1841,8 @@ async function runTrain() {
 }
 
 async function calibrate() {
+  if (state.busy) return;
+  busy(true);
   status('Calibrating the analytic model…', 'busy');
   try {
     const c = await ask('calibrate', { weights: state.weights, samples: 4 });
@@ -1806,7 +1851,9 @@ async function calibrate() {
     renderBench(state.bench || { rows: [] });
     status('Ready', 'ok');
   } catch (e) {
-    status(`Calibration failed, using default weights: ${e.message}`, 'err');
+    taskFailure('Calibration failed, using default weights', e);
+  } finally {
+    busy(false);
   }
 }
 
@@ -1814,6 +1861,7 @@ async function calibrate() {
 // Boot
 // ---------------------------------------------------------------------------------------------
 function boot() {
+  state.speed = Number($('sel-speed').value);
   renderRoster('red');
   renderRoster('blue');
   renderTeams();
@@ -1849,6 +1897,11 @@ function boot() {
 
   $('btn-run').addEventListener('click', runSingle);
   $('btn-mc').addEventListener('click', runMonteCarlo);
+  $('btn-cancel').addEventListener('click', () => {
+    if (!state.busy) return;
+    $('btn-cancel').disabled = true;
+    stopWorker(new DOMException('Task cancelled', 'AbortError'));
+  });
   // Changing the seat the AI plans from, or who it plans against, does not re-read the numbers already
   // on screen, and a stale batch labelled with the other question is worse than none: a single match is
   // cheap enough to just re-run, while a batch of 120 only says so and waits to be asked.
@@ -1864,6 +1917,7 @@ function boot() {
   };
   const reask = () => {
     seatNote();
+    if (state.busy) return;
     if (state.lastRun === 'single') runSingle();
     else if (state.result) status(`Planning for ${plannedSide().toUpperCase()} against ${opponentPick().label} — run again to apply`, 'ok');
   };
@@ -1900,14 +1954,11 @@ function boot() {
   });
   $('btn-play').addEventListener('click', () => {
     if (!state.timeline) return;
-    state.playing = !state.playing;
-    $('btn-play').textContent = state.playing ? 'Pause' : 'Play';
-    state.lastTs = 0;
-    if (state.playing) state.raf = requestAnimationFrame(animate);
+    if (state.playing) pausePlayback();
+    else startPlayback();
   });
   $('scrub').addEventListener('input', (e) => {
-    state.playing = false;
-    $('btn-play').textContent = 'Play';
+    pausePlayback();
     setFrame(Number(e.target.value));
   });
   $('sel-speed').addEventListener('change', (e) => {
@@ -1929,7 +1980,9 @@ function boot() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target && e.target.tagName) || '';
     const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(tag) || e.target.isContentEditable;
-    if (typing) return;
+    if (typing || e.defaultPrevented) return;
+    // A focused button or disclosure keeps its native Space/Enter action.
+    if ((e.key === ' ' || e.key === 'Enter') && e.target.closest?.('button, a, summary, [role="button"]')) return;
     if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       toggleFullscreen();
@@ -1958,11 +2011,35 @@ function boot() {
       goToTime(state.timeline && state.timeline.length ? state.timeline[state.timeline.length - 1].t : 0);
     }
   });
-  for (const t of document.querySelectorAll('.tab')) {
+  const tabs = [...document.querySelectorAll('.tab')];
+  if (tabs.length) tabs[0].parentElement.setAttribute('role', 'tablist');
+  for (const t of tabs) {
+    t.id = `tab-button-${t.dataset.tab}`;
+    t.setAttribute('role', 'tab');
+    t.setAttribute('aria-controls', `tab-${t.dataset.tab}`);
+    const panel = $(`tab-${t.dataset.tab}`);
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', t.id);
+    panel.tabIndex = 0;
     t.addEventListener('click', () => {
-      for (const x of document.querySelectorAll('.tab')) x.classList.toggle('active', x === t);
+      for (const x of tabs) {
+        x.classList.toggle('active', x === t);
+        x.setAttribute('aria-selected', String(x === t));
+        x.tabIndex = x === t ? 0 : -1;
+      }
       for (const b of document.querySelectorAll('.tab-body')) b.hidden = b.id !== `tab-${t.dataset.tab}`;
       if (t.dataset.tab === 'insight') redrawInsightCharts();
+    });
+    t.addEventListener('keydown', (event) => {
+      const index = tabs.indexOf(t);
+      const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+      if (next < 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      tabs[next].focus();
+      tabs[next].click();
     });
   }
   const relayout = () => relayoutStage();
