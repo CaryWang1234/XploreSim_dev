@@ -667,6 +667,15 @@ function seamChecks(seed) {
 // the HUB body behind it is solid, so the ball is expelled. Anything beyond this margin is a ball
 // that travelled over the HUB instead of into it.
 const MISS_PAST_LIMIT_IN = 20;
+// §5.4: the HUB opening is 41.7 in across the flats of the hexagon and the prism it sits on is 47 in
+// square, so a made shot aims within 20.85 in of the centre and a shot that strikes the structure aims
+// at 23.5 in or more (33.2 in on a diagonal).
+const HUB_OPEN_R_IN = FIELD.hub.openingHexIn / 2;
+const HUB_FACE_IN = FIELD.hub.sizeIn / 2;
+// How far the reconstructed aim may sit past the geometry it is checked against: every recorded position
+// is truncated to whole inches, and the step that carries the last one forward is that same error divided
+// by the ticks flown.
+const AIM_TOL_IN = 3;
 
 // §5.4 again, from the other side: a shot that misses the opening must not sail through the HUB and
 // come to rest beyond its far face. Every shot leaves the muzzle aimed at the HUB centre, so a ball
@@ -677,70 +686,22 @@ const MISS_PAST_LIMIT_IN = 20;
 // sc.netMiss = false, the pre-fix drop, which must put balls out past that face or the check is not
 // measuring anything.
 function missLandingRun(seed, netMiss, spread) {
+  const face = { red: GEO.red.hub.x + FIELD.hub.sizeIn / 2, blue: GEO.blue.hub.x - FIELD.hub.sizeIn / 2 };
   let landings = 0;
   let pastFace = 0;
   let worst = -Infinity;
   let oneFrame = 0;
   const jumps = [];
-  const res = simulateMatch({
-    redAlliance: makeAlliance(SAMPLES.slice(0, 3), 'red'),
-    blueAlliance: makeAlliance(SAMPLES.slice(0, 3), 'blue'),
-    redPolicy: naivePolicy('red'),
-    bluePolicy: naivePolicy('blue'),
-    scenario: { ...defaultScenario(), seed, autoWinner: 'auto', netMiss, ...(spread === undefined ? {} : { shotSpreadIn: spread }) },
-    record: true,
-  });
-  const face = { red: GEO.red.hub.x + FIELD.hub.sizeIn / 2, blue: GEO.blue.hub.x - FIELD.hub.sizeIn / 2 };
-  // The last frame is pushed after every in-flight FUEL has been resolved at the match clock, so a ball
-  // caught airborne at the buzzer "lands" on its aim point from wherever the clock stopped it. That is a
-  // truncation, not a statement about where a launch goes, so the final frame is not a landing.
-  const endT = res.timeline[res.timeline.length - 1].t;
-  // Group the in-flight frames into flights: a ball id is recycled all MATCH, so its positions have to be
-  // read as consecutive runs. One run gives the step (first to last over the ticks it flew) and the frame
-  // it left the air in. A flight of a single frame is a launch blocked in its first tick, which is a
-  // legitimate early end and has no step to measure against, so it is counted and left out of the bound.
-  const runs = new Map();
-  const done = new Map();
-  res.timeline.forEach((f, k) => {
-    const live = new Set();
-    for (const b of f.fuel) {
-      if (b[3] !== 4) continue;
-      live.add(b[0]);
-      const r = runs.get(b[0]);
-      if (r && r.k === k - 1) {
-        r.k = k;
-        r.lx = b[1];
-        r.ly = b[2];
-        r.n += 1;
-        r.t = f.t;
-        r.tgt = b[4];
-      } else {
-        if (r) done.set(b[0], r);
-        runs.set(b[0], { k, n: 1, fx: b[1], fy: b[2], lx: b[1], ly: b[2], t: f.t, tgt: b[4] });
-      }
-    }
-    for (const [id, r] of runs) if (!live.has(id)) done.set(id, r);
-  });
-  for (const [id, r] of done) {
-    if (r.t >= endT) continue;
-    for (const f of res.timeline) {
-      if (f.t <= r.t) continue;
-      if (f.t >= endT) break;
-      const b = f.fuel.find((e) => e[0] === id);
-      if (!b) continue;
-      if (b[3] === 4) break;
-      if (f.t - r.t <= 0.6) {
-        landings += 1;
-        const past = r.tgt === 1 ? b[1] - face.red : face.blue - b[1];
-        if (past > MISS_PAST_LIMIT_IN) pastFace += 1;
-        if (past > worst) worst = past;
-        if (r.n > 1) {
-          const step = Math.hypot(r.lx - r.fx, r.ly - r.fy) / (r.n - 1);
-          jumps.push({ jump: Math.hypot(b[1] - r.lx, b[2] - r.ly), step });
-        } else oneFrame += 1;
-      }
-      break;
-    }
+  for (const f of flightWalk(seed, { netMiss, spread })) {
+    // A HUB exit waits out processingSec before the FUEL reappears, so a landing is told from an exit by
+    // a short gap between the last in-flight frame and the first loose one.
+    if (f.outcome !== 'loose' || f.gap > 6) continue;
+    landings += 1;
+    const past = f.tgt === 1 ? f.rest[0] - face.red : face.blue - f.rest[0];
+    if (past > MISS_PAST_LIMIT_IN) pastFace += 1;
+    if (past > worst) worst = past;
+    if (f.n > 1) jumps.push({ jump: f.jump, step: f.step });
+    else oneFrame += 1;
   }
   return { landings, pastFace, worst, jumps, oneFrame };
 }
@@ -764,6 +725,108 @@ function missLandingChecks(seed) {
   console.log('--- §5.4 net over a missed shot (direct flight landings, in past the HUB face) ---');
   console.log(`  net on   landings ${on.landings}  past the face ${on.pastFace}  worst ${on.worst.toFixed(1)}`);
   console.log(`  net off  landings ${off.landings}  past the face ${off.pastFace}  worst ${off.worst.toFixed(1)}`);
+}
+
+// Reads every shot flight back out of the replay of one naive-policy match. For each flight it gives the
+// last frame the ball was seen in the air, the point that line was heading for, and what became of it:
+// `in` (the ball left the field, because a scored FUEL is inside the HUB and not drawn), or `loose` with
+// the place it came to rest. `shotSpreadIn` switches the dispersion off, which restores the
+// aimed-at-centre flight and the independently drawn drop.
+function flightWalk(seed, opt = {}) {
+  const scenario = {
+    ...defaultScenario(),
+    seed,
+    autoWinner: 'auto',
+    ...(opt.netMiss === undefined ? {} : { netMiss: opt.netMiss }),
+    ...(opt.spread === undefined ? {} : { shotSpreadIn: opt.spread }),
+  };
+  const res = simulateMatch({
+    redAlliance: makeAlliance(SAMPLES.slice(0, 3), 'red'),
+    blueAlliance: makeAlliance(SAMPLES.slice(0, 3), 'blue'),
+    redPolicy: naivePolicy('red'),
+    bluePolicy: naivePolicy('blue'),
+    scenario,
+    record: true,
+  });
+  const tickSec = scenario.chunkSec;
+  const frames = res.timeline;
+  const endT = frames[frames.length - 1].t;
+  // Group the in-flight frames into flights: a ball id is recycled all MATCH, so its positions have to be
+  // read as consecutive runs. One run gives its points and the frame it left the air in. A flight of a
+  // single frame is a launch blocked in its first tick, which is a legitimate early end and has no step
+  // to measure against. A full flight is five frames: the engine integrates a 0.55 s launch at 0.1 s and
+  // resolves it on the sixth tick, so the fifth drawn frame sits half a step short of the target, and
+  // that is the frame the aim point is reconstructed from when the ball has no resting point to read.
+  const runs = new Map();
+  const done = [];
+  frames.forEach((f, k) => {
+    const live = new Set();
+    for (const b of f.fuel) {
+      if (b[3] !== 4) continue;
+      live.add(b[0]);
+      const r = runs.get(b[0]);
+      if (r && r.k === k - 1) {
+        r.k = k;
+        r.pts.push([b[1], b[2]]);
+        r.t = f.t;
+        r.tgt = b[4];
+        r.tl = b[5];
+      } else {
+        if (r) done.push(r);
+        runs.set(b[0], { k, id: b[0], pts: [[b[1], b[2]]], t: f.t, tgt: b[4], tl: b[5] });
+      }
+    }
+    for (const [id, r] of runs) if (!live.has(id)) { done.push(r); runs.delete(id); }
+  });
+  const kOfT = new Map();
+  frames.forEach((f, k) => kOfT.set(+f.t.toFixed(2), k));
+  const out = [];
+  for (const r of done) {
+    // A ball caught airborne at the buzzer "lands" on its aim point from wherever the clock stopped it,
+    // which is a truncation rather than a statement about where a launch goes, so it is not a landing.
+    if (r.t >= endT || r.tgt === 3) continue;
+    const n = r.pts.length;
+    const [x0, y0] = r.pts[0];
+    const [xl, yl] = r.pts[n - 1];
+    const sx = n > 1 ? (xl - x0) / (n - 1) : 0;
+    const sy = n > 1 ? (yl - y0) / (n - 1) : 0;
+    const k0 = kOfT.get(+r.t.toFixed(2));
+    let outcome = 'in';
+    let rest = null;
+    let gap = null;
+    for (let k = k0 + 1; k <= k0 + 6 && k < frames.length; k++) {
+      const b = frames[k].fuel.find((e) => e[0] === r.id);
+      if (!b) continue;
+      if (b[3] === 4) { outcome = null; break; }
+      outcome = 'loose';
+      rest = [b[1], b[2]];
+      gap = k - k0;
+      break;
+    }
+    if (!outcome) continue;
+    // The recorded fifth element is the flight time still to run at that frame, so the aim is the last
+    // drawn position carried forward by exactly that much of the ball's own step. A constant half-step
+    // guess is wrong for a HUMAN PLAYER's throw, which has a longer fuse than a ROBOT's launch.
+    const left = (r.tl || 0) / tickSec;
+    out.push({
+      n,
+      tgt: r.tgt,
+      hub: r.tgt === 1 ? GEO.red.hub : GEO.blue.hub,
+      step: Math.hypot(sx, sy),
+      gap,
+      outcome,
+      rest,
+      tl: r.tl || 0,
+      // A flight that ran its whole fuse is drawn with at most one tick of it left at its last frame: a
+      // ROBOT's 0.55 s launch shows 0.05 there and a HUMAN PLAYER's 0.7 s throw shows 0.1. Anything still
+      // holding more than a tick was stopped short by a DEFENDER's bumper or by the buzzer, and neither
+      // says where the launch was aimed.
+      truncated: (r.tl || 0) > tickSec * 1.05,
+      jump: rest ? Math.hypot(rest[0] - xl, rest[1] - yl) : null,
+      aim: [xl + left * sx, yl + left * sy],
+    });
+  }
+  return out;
 }
 
 // A launch now flies AT the point it comes down on. Before this the flight was integrated to the exact
@@ -797,6 +860,74 @@ function dispersionChecks(seed) {
   console.log('--- a launch lands where it was drawn going (last flight frame to rest, bound 1.5 steps + 8 in) ---');
   console.log(`  dispersion on  landings ${on.n} (plus ${on.skipped} blocked in their first tick)  outside the bound ${on.bad}  worst overshoot ${on.worst.toFixed(1)} in`);
   console.log(`  control, spread 0: outside the bound ${off.bad} of ${off.n} landings, worst ${off.worst.toFixed(1)} in, so the walk is not blind`);
+}
+
+// A fan has to open in two different places at once: a made shot goes into the 41.7 in opening (§5.4), a
+// circle of 20.85 in around the HUB centre, and a miss stops on the structure, which is a 47 in square, so
+// its aim is at 23.5 in from the centre or more (33.2 in on a diagonal). Getting both from one clamp is
+// what broke: the opening circle is smaller than the square, so pushing every launch out to the face moved
+// the made shots onto the rim of the prism too, and a going-in shot was drawn clipping the wall — with the
+// side effect that its swept segment ran around the middle of the HUB instead of through it, past a
+// defender standing there. The made-shot side is the assertion, and it is exact: a scored ball is inside
+// the HUB and not drawn, so the flight line is all there is to read, and it is carried forward by the fuse
+// time the record itself says is still to run (exact for a ROBOT's 0.55 s launch and a HUMAN PLAYER's 0.7 s
+// throw alike). What is left is the whole-inch truncation of every recorded position and the step estimate
+// that divides those positions by the ticks flown, which is AIM_TOL_IN. The miss side is only reported:
+// placeLoose() moves a ball that comes down against the structure by up to a FUEL spacing, so its resting
+// point is the aim plus that, and no radius floor holds. The second arm calibrates the reconstruction:
+// sc.shotSpreadIn = 0 aims every launch at the centre, so the same walk must report made shots at no
+// radius at all and nothing stopping on the face. Run the identical walk against a worktree of the build
+// before the clamp was limited to misses and every one of its 2209 made shots reads outside the opening,
+// median 25.5 in from the centre, which is what this guard is for.
+function aimChecks(seed) {
+  const walk = (opt) => {
+    const acc = { made: [], miss: [], cut: 0 };
+    for (const s of [seed, seed + 29]) {
+      for (const f of flightWalk(s, opt)) {
+        // A flight that ended before its own fuse had run out was stopped by something other than
+        // reaching where it was aimed: a DEFENDER's bumper in the lane, or the buzzer. Neither says
+        // anything about the aim, so only a flight that ran its full fuse is counted.
+        if (f.truncated) {
+          acc.cut += 1;
+          continue;
+        }
+        const rad = f.outcome === 'in'
+          ? Math.hypot(f.aim[0] - f.hub.x, f.aim[1] - f.hub.y)
+          : Math.hypot(f.rest[0] - f.hub.x, f.rest[1] - f.hub.y);
+        if (f.outcome === 'in') acc.made.push(rad);
+        else if (f.n > 1 && f.jump >= 0.25 * f.step && f.jump <= 1.5 * f.step + 8) acc.miss.push(rad);
+      }
+    }
+    return {
+      cut: acc.cut,
+      made: acc.made.sort((a, b) => a - b),
+      miss: acc.miss.sort((a, b) => a - b),
+      madeOutside: acc.made.filter((r) => r > HUB_OPEN_R_IN + AIM_TOL_IN).length,
+      worstMade: acc.made.length ? Math.max(0, ...acc.made.map((r) => r - HUB_OPEN_R_IN)) : 0,
+      missShort: acc.miss.filter((r) => r < HUB_FACE_IN - AIM_TOL_IN).length,
+      closestMiss: acc.miss.length ? Math.min(...acc.miss) : Infinity,
+    };
+  };
+  const on = walk({});
+  const centred = walk({ spread: 0 });
+  const half = (a) => (a.length ? a[Math.floor(a.length / 2)] : NaN);
+  if (on.made.length < 20) throw new Error(`only ${on.made.length} made shots recorded, so the aim check has nothing to measure`);
+  if (on.miss.length < 10) throw new Error(`only ${on.miss.length} missed shots recorded, so the aim check cannot see the structure`);
+  if (on.madeOutside !== 0) {
+    throw new Error(`${on.madeOutside} of ${on.made.length} made shots were aimed outside the 41.7 in opening (worst ${on.worstMade.toFixed(1)} in past its ${HUB_OPEN_R_IN} in circle)`);
+  }
+  if (on.missShort !== 0) {
+    throw new Error(`${on.missShort} of ${on.miss.length} missed shots came to rest inside the HUB footprint (closest ${on.closestMiss.toFixed(1)} in against a ${HUB_FACE_IN} in face)`);
+  }
+  const centredWorst = centred.made.length ? Math.max(...centred.made) : Infinity;
+  if (centredWorst > AIM_TOL_IN) {
+    throw new Error(`the aimed-at-centre control reconstructs made shots at up to ${centredWorst.toFixed(1)} in, so the walk is biased and the two numbers above measure the walk, not the engine`);
+  }
+  console.log('--- a made shot aims into the opening, a miss aims at the structure (in from HUB centre) ---');
+  console.log(`  made shots ${on.made.length}  median ${half(on.made).toFixed(1)}  outside the ${HUB_OPEN_R_IN} in opening ${on.madeOutside}  worst ${on.worstMade.toFixed(1)} in past it`);
+  console.log(`  misses ${on.miss.length}  median ${half(on.miss).toFixed(1)}  closest ${on.closestMiss.toFixed(1)} against the ${HUB_FACE_IN} in face`);
+  console.log(`  ${on.cut} flights left the air with more than a tick of fuse still on them, or were swept up again the frame after they landed, so they say nothing about an aim and are not counted`);
+  console.log(`  control, spread 0: ${centred.made.length} made shots at median ${half(centred.made).toFixed(1)} in, worst ${centredWorst.toFixed(1)}, so the walk reads the aim it is given`);
 }
 
 // FUEL spacing. §5.10.1 makes FUEL a 5.91 in ball, so two of them cannot sit at one point. The
@@ -1045,6 +1176,7 @@ passHubChecks(20260110);
 seamChecks(20260110);
 missLandingChecks(20260110);
 dispersionChecks(20260110);
+aimChecks(20260110);
 startChecks(20260110);
 spacingChecks(20260110);
 contactChecks(20260110);

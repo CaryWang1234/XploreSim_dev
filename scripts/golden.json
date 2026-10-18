@@ -6,13 +6,13 @@
       "name": "greedy-mirror",
       "note": "hand-written cycling plan on both sides, no defence, faults on",
       "seed": 20260110,
-      "full": 2187984560,
+      "full": 3046007920,
       "cuts": [
-        389773921,
-        1001173941,
-        3611339647,
-        477518694,
-        2187984560
+        3924376126,
+        3015881822,
+        506564822,
+        4279939901,
+        3046007920
       ],
       "total": {
         "red": 615,
@@ -31,13 +31,13 @@
       "name": "pinned-score-contact",
       "note": "every ROBOT held on SCORE, §7.4.4 hard contact on, so the foul path is in the digest",
       "seed": 90001,
-      "full": 3347018771,
+      "full": 1948454655,
       "cuts": [
-        2701691461,
-        2321558796,
-        2142179238,
-        1239928481,
-        3347018771
+        2891476668,
+        2377814537,
+        1511303051,
+        1021987923,
+        1948454655
       ],
       "total": {
         "red": 616,
@@ -56,25 +56,25 @@
       "name": "ai-vs-greedy",
       "note": "the shipped search on red, greedy on blue: MCTS, opponent model and the whole intent ladder",
       "seed": 700001,
-      "full": 224095662,
+      "full": 2078935994,
       "cuts": [
-        2016181141,
-        2177167358,
-        365695342,
-        1390113185,
-        224095662
+        1887924871,
+        3525572530,
+        2805002342,
+        3667085107,
+        2078935994
       ],
       "total": {
-        "red": 542,
-        "blue": 598
+        "red": 636,
+        "blue": 622
       },
       "fuel": {
-        "red": 522,
-        "blue": 578
+        "red": 616,
+        "blue": 602
       },
       "frames": 1601,
-      "scored": 1059,
-      "collected": 1267,
+      "scored": 1168,
+      "collected": 1496,
       "fouls": 0
     }
   ]

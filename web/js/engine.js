@@ -159,10 +159,13 @@ const MISS_DROP_FAR_IN = 30;
 // spread is the estimate, and sc.shotSpreadIn = 0 restores the aimed-at-centre launch as the control.
 const HUB_OPEN_R_IN = FIELD.hub.openingHexIn / 2; // 20.85: a landing point inside this is in the opening
 const HUB_FACE_IN = FIELD.hub.sizeIn / 2; // 23.5: the footprint, so a miss lands at least this far out
-const SHOT_SPREAD_IN = 22; // swept on the greedy mirror at n=192: 0 -> 594.7, 6 -> 583.2, 12 -> 590.3,
-                           // 18 -> 592.2, 22 -> 593.4, 30 -> 593.7. That is flat inside the mirror's own
+const SHOT_SPREAD_IN = 22; // swept on the greedy mirror at 192 MATCHes per point: 0 -> 597.7, 12 -> 588.7,
+                           // 22 -> 592.6, 30 -> 593.2. Not monotone and all four inside the mirror's own
                            // error bar, so 22 is a stated estimate of how far a wide miss carries past the
-                           // face, not a value tuned against the anchor.
+                           // face, not a value tuned against the anchor. The same sweep on the build that
+                           // still clamped made shots to the prism wall read 0 -> 594.7, 12 -> 590.3,
+                           // 22 -> 593.4, 30 -> 593.7: flat there too, which is why the value did not move
+                           // when the clamp was fixed.
 const SHOT_MISS_DRIFT_RAD = 0.9; // ~51 deg either side of the incoming bearing: a miss stays on the half
                                  // of the HUB the shooter was looking at, which is what a solid prism with
                                  // the opening on top and a net at its back implies
@@ -1253,9 +1256,14 @@ export function simulateMatch(opts) {
     let rad = hit ? HUB_OPEN_R_IN * Math.sqrt(rng()) : HUB_FACE_IN + rng() * spreadIn;
     // The footprint is a square, so a landing radius of HUB_FACE_IN at 45 deg is still on the top plate.
     // Push it out along the same bearing to the face it would have struck, or the replay would show the
-    // ball stopping in the middle of the HUB and the drop then happening somewhere else.
-    const bound = HUB_FACE_IN / Math.max(Math.abs(Math.cos(ang)), Math.abs(Math.sin(ang)));
-    if (rad < bound) rad = bound;
+    // ball stopping in the middle of the HUB and the drop then happening somewhere else. This belongs to
+    // the miss only: the opening (20.85 in) is inside the square, so a clamp that also ran on made shots
+    // moved every one of them onto the prism's outer edge, and the swept segment of a shot that was
+    // going in ran around the middle of the HUB instead of into it.
+    if (!hit) {
+      const bound = HUB_FACE_IN / Math.max(Math.abs(Math.cos(ang)), Math.abs(Math.sin(ang)));
+      if (rad < bound) rad = bound;
+    }
     const tx = hub.x + Math.cos(ang) * rad;
     const ty = hub.y + Math.sin(ang) * rad;
     return { x: tx, y: ty, vx: (tx - fromX) / flightSec, vy: (ty - fromY) / flightSec };
@@ -2590,8 +2598,9 @@ export function simulateMatch(opts) {
     // FUEL in flight additionally carries its kind, its aim (element 3 = 4, element 4 = flight target:
     // 1 red HUB, 2 blue HUB, 3 a PASS aim point), how much flight it has left and who launched it. The
     // last two exist so the replay can draw ONE line per shooting ROBOT through the balls it has in the
-    // air, oldest first: a turret firing on the move then shows the curve its own path traced, and a
-    // turret standing still collapses to the single straight line the stream really is.
+    // air, oldest first. Each ball flies at the point it comes down on, so a hopper emptied in one place
+    // fans around the HUB instead of drawing one line into the middle, and a ROBOT firing on the move
+    // bows that fan through the positions it has already left.
     const pts = [];
     for (let i = 0; i < total; i++) {
       const st = fstate[i];

@@ -610,8 +610,8 @@ export function defaultScenario() {
     // recirculating FUEL about once a MATCH. The 0.1 s kinematic engine has no other ceiling on
     // tempo, so without this every ALLIANCE cycles a fountain and roughly doubles the real score.
     // Verified against the greedy mirror (scripts/mirror.mjs, n=24 x 2 seed sets x both trios). On the
-    // shipped build that mirror reads 593.4 with its red-minus-blue split inside its own error bar
-    // (-2.7 +- 6.2); the 615.7 the knob was originally backed out from belongs to an earlier layout.
+    // shipped build that mirror reads 591.7 with its red-minus-blue split inside its own error bar
+    // (0.4 +- 6.2); the 615.7 the knob was originally backed out from belongs to an earlier layout.
     // Swept on the build before the lanes: 4.0 -> 598.6, 4.2 -> 615.7, 4.4 -> 614.7, 4.6 -> 622.5, and
     // the sweep stopped at 4.2 because past it the mirror developed a side gap (4.4: red-blue -14.8 +-
     // 6.5, 4.6: -21.9 +- 7.3) that was not yet explained, so the cap stopped where the MATCHes still
@@ -624,9 +624,11 @@ export function defaultScenario() {
     // red-blue split is -3.4, -5.3, -11.4, +1.4, -1.5, -9.9, none past 2 sem — what had been making a
     // mirror favour a seat was a ROBOT sliding sideways across a seam to get home.
     // Re-swept once more after a launch was given a dispersion: 4.2 -> 593.4, 4.6 -> 600.6, 5.0 -> 616.3,
-    // 5.2 -> 613.4 (n=192). The fan costs about a point at the shipped cap and the curve now flattens near
-    // 615 rather than reaching 627, so 5.0 would put the anchor 1.7% under the real average - inside the
-    // band - and it is still not shipped. A knob with no independent measurement is not free to move:
+    // 5.2 -> 613.4 (n=192). Re-swept a third time after the face clamp was limited to misses, which is the
+    // build that ships: 4.2 -> 592.6, 4.6 -> 602.3, 5.0 -> 613.2, 5.2 -> 614.6 (n=192). The fan costs about
+    // a point at the shipped cap and the curve flattens near 615 rather than reaching 627, so 5.0 would put
+    // the anchor 2.2% under the real average - only at the edge of the band, and it was 1.7% on the build
+    // before - and it is still not shipped. A knob with no independent measurement is not free to move:
     // every measured figure on the page is anchored on it, and retuning it is how the cost of a rule change
     // gets erased instead of reported. 4.2 ships and the shortfall is stated where it is read.
     hubExitRate: 4.2,

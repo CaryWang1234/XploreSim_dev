@@ -131,10 +131,10 @@ The rules this repo has learned the hard way, all of them from a figure that tur
 
 Stated on the page too, because a planner is used to make decisions:
 
-- AUTO scoring is low: the engine puts ≈97 FUEL in during AUTO (92.4 red, 100.7 blue over 12 MATCHes,
+- AUTO scoring is low: the engine puts ≈97 FUEL in during AUTO (92.4 red, 100.8 blue over 12 MATCHes,
   and `autoWinner: 'auto'` resolves that from the simulation, so a 12-MATCH probe does not split it
   evenly) where real Einstein Finals alliances managed 111-177.
-- TELEOP throughput is high: 5.34 FUEL/s per alliance against ≈4.7 in the real finals.
+- TELEOP throughput is high: 5.36 FUEL/s per alliance against ≈4.7 in the real finals.
 - The YELLOW/RED CARD ladder is not priced. A second YELLOW in a phase is a DISQUALIFICATION and its
   tournament cost is outside the model (`sc.contactFouls`).
 - TRAVERSAL RP is rarely reached, so the TOWER ladder is softer than a real elite alliance's.
@@ -143,18 +143,24 @@ Stated on the page too, because a planner is used to make decisions:
 ## Calibration anchors
 
 Real 2026 Einstein Finals data from The Blue Alliance (event `2026cmptx`): alliance average 627, high
-842. The greedy same-roster mirror is 593.4 (601.1 and 585.7 across the two trios), 5.4% under that
-average. Against the hand-written greedy cycling baseline, on identical ROBOTs, the search wins 65.1% of
-MATCHes (n=96, 24 per family over four disjoint seed families) with a margin of +31.1 and a score of
-648.1 against 617.0.
+842. The greedy same-roster mirror is 591.7 (597.9 and 585.5 across the two trios), 5.6% under that
+average. Against the hand-written greedy cycling baseline, on identical ROBOTs, the search wins 67.2% of
+MATCHes (n=96, 24 per family over four disjoint seed families) with a margin of +27.9 and a score of
+657.3 against 629.5.
 
-The anchor sits 5.4% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
-back. Two model changes put it there. The BUMP/TRENCH seam (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP,
+The anchor sits 5.6% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
+back. Three model changes put it there. The BUMP/TRENCH seam (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP,
 so the two lanes inside a band meet at one seam and nothing connects them) took about 16 points off the
-whole outlet-cap curve. Giving a launch a dispersion took about 1 more off the anchor and is worth 9.9 win
+whole outlet-cap curve. Giving a launch a dispersion costs about 5 points on one sweep of the shipped build
+(aiming every shot at the centre reads 597.7 against 592.6 at the 22 in that ships) and is worth 7.8 win
 points AGAINST the search, because a fan of loose FUEL around the HUB helps the machine that only cycles
-more than it helps the one that plans. Re-swept on this build, `hubExitRate` 4.2 → 593.4, 4.6 → 600.6,
-5.0 → 616.3, 5.2 → 613.4 at n=192 per point, with the red-blue split inside one standard error everywhere:
-5.0 would bring the anchor back to 1.7% under. It is not shipped. The cap has no independent measurement,
+more than it helps the one that plans. And the first version of that fan clamped every launch out to the
+HUB's 47 in square footprint, which is outside the 20.85 in opening it was supposed to be aiming at:
+limiting that clamp to misses cost a further 1.7 points between builds (593.4 → 591.7) and is what
+`scripts/verify.mjs` now measures as two populations.
+Re-swept on this build, `hubExitRate` 4.2 → 592.6, 4.6 → 602.3,
+5.0 → 613.2, 5.2 → 614.6 at 192 MATCHes per point, with the red-blue split inside one standard error
+everywhere: 5.0 would bring the anchor to 2.2% under, which is only at the edge of the band. It is not
+shipped. The cap has no independent measurement,
 every figure on the page is anchored on it, and moving a calibrated knob to erase the cost of a rule change
 is how a simulator stops meaning anything.
