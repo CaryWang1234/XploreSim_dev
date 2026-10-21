@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { parseScouting, placeRosters } from '../web/js/scouting.js';
 import { createWorkerClient } from '../web/js/worker-client.js';
 import { monteCarlo, matchSeed } from '../web/js/mc.js';
 import { DEFAULT_WEIGHTS } from '../web/js/ai.js';
@@ -560,6 +562,77 @@ test('the card ladder takes the machine that earned the second YELLOW, and the a
   // Determinism, because the whole page is replayed from a seed.
   const again = contactPlay(seed, true);
   assert.equal(again.robotStats.reduce((a, s) => a + s.dq, 0), res.robotStats.reduce((a, s) => a + s.dq, 0));
+});
+
+test('a scouting CSV lands on the card fields, and what cannot land is said', () => {
+  const csv = [
+    'Team No,Robot Name,Drive Speed,Speed m/s,Intake Rate,Capacity,Accuracy,Pass Range (m),Height cm,Climb Level,Auto FUEL,Bench,OPR,Notes',
+    '11019,Xplore,,4.2,,,,8.5,55,2,26,no,88.4,"wheels bought new"',
+    '254,Chezy,152,,12,65,92,380,,21.5,0,8,yes,91.2,',
+  ].join('\n');
+  const { rows, problems, unknown } = parseScouting(csv);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].team, 11019);
+  assert.equal(rows[0].name, 'Xplore');
+  // Metric columns are converted into the Manual's inches and seconds (§1.6) rather than read as inches.
+  assert.ok(Math.abs(rows[0].driveSpeedIps - 4.2 * 39.3701) < 0.01, `m/s did not convert: ${rows[0].driveSpeedIps}`);
+  assert.ok(Math.abs(rows[0].passRangeIn - 8.5 * 39.3701) < 0.01, `metres of reach did not convert: ${rows[0].passRangeIn}`);
+  assert.ok(Math.abs(rows[0].heightIn - 55 / 2.54) < 0.01, `cm of height did not convert: ${rows[0].heightIn}`);
+  assert.equal(rows[0].climbMax, 2);
+  assert.equal(rows[0].autoRoutine, 26);
+  assert.equal(rows[0].plays, false, 'a benched row has to arrive benched');
+  assert.equal(rows[1].driveSpeedIps, 152);
+  assert.equal(rows[1].shootAccuracy, 0.92, 'a percentage column has to become a probability');
+  // A column the model has no field for is named, not silently dropped, and it does not fail the import.
+  assert.deepEqual(unknown, ['OPR', 'Notes']);
+  assert.ok(problems.some((p) => p.includes('OPR')));
+
+  // A number outside the envelope the engine can run is clamped and the clamp is reported; a value that
+  // is not a number skips its column rather than writing NaN onto a card.
+  const odd = parseScouting('Team No,Height cm,Drive Speed\n1,120,fast');
+  assert.equal(odd.rows[0].team, 1);
+  assert.equal(odd.rows[0].heightIn, 30, `120 cm became ${odd.rows[0].heightIn} in, unclamped`);
+  assert.equal(odd.rows[0].driveSpeedIps, undefined);
+  assert.ok(odd.problems.some((p) => p.includes('clamped')), JSON.stringify(odd.problems));
+  assert.ok(odd.problems.some((p) => p.includes('not a number')), JSON.stringify(odd.problems));
+
+  // A mechanism this engine has no physics for is refused out loud.
+  const bogus = parseScouting('Team No,Mechanism\n1,hopper');
+  assert.equal(bogus.rows[0].mechanism, undefined, JSON.stringify(bogus.rows[0]));
+  assert.ok(bogus.problems.some((p) => p.includes('not a mechanism')), JSON.stringify(bogus.problems));
+});
+
+test('the shipped example file parses, and the rows go where a MATCH can field them', () => {
+  const text = readFileSync(new URL('../docs/scouting-example.csv', import.meta.url), 'utf8');
+  const { rows, problems } = parseScouting(text);
+  assert.equal(rows.length, 3, JSON.stringify(problems));
+  assert.deepEqual(problems, [], `the example file should import clean, got ${JSON.stringify(problems)}`);
+  assert.equal(rows[0].mechanism, 'turret');
+  assert.equal(rows[0].driver, 'good');
+
+  const current = {
+    red: [0, 1, 2].map((i) => ({ ...SAMPLES[i] })),
+    blue: [3, 4, 5].map((i) => ({ ...SAMPLES[i] })),
+  };
+  const six = placeRosters([...rows, ...rows.map((r) => ({ ...r, team: r.team - 1 }))], 'red', current);
+  assert.equal(six.rosters.red[0].team, 9999);
+  assert.equal(six.rosters.blue[0].team, 9998, 'six rows have to fill both ALLIANCES');
+
+  const three = placeRosters(rows, 'blue', current);
+  assert.equal(three.rosters.blue[0].team, 9999, 'the seat being planned gets the rows');
+  assert.equal(three.rosters.red[0].team, 254, 'the other ALLIANCE keeps its cards');
+  // The flat wire names have to land in the nested card objects, or an imported declaration is a key no
+  // engine code reads and the card looks right while the MATCH ignores it.
+  assert.equal(three.rosters.blue[0].auto.routineFuel, 26);
+  assert.equal(three.rosters.blue[0].climb.l1, true);
+  assert.equal(three.rosters.blue[0].climb.l2, false, 'the example file climbs to LEVEL 1, not 2');
+  assert.equal(three.rosters.blue[0].climb.l3, false);
+  assert.equal(three.rosters.blue[0].climb.timeSec, 8);
+  assert.equal(three.rosters.blue[0].autoRoutine, undefined, 'the wire name leaked onto the card');
+  assert.equal(three.rosters.blue[2].plays, false, 'the third row of the example file is a bench spare');
+
+  const many = placeRosters(rows.concat([{ team: 1 }, { team: 2 }]), 'red', current);
+  assert.ok(many.notes.some((n) => n.includes('not fielded')), 'extra rows have to be reported, not dropped quietly');
 });
 
 test('a setup that cannot make a MATCH is refused rather than half-applied', () => {

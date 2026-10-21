@@ -113,6 +113,8 @@
 
         <div class="run-row store-row">
           <button class="btn small" id="btn-copy-link" type="button" title="A link that opens this page with these six robots, these weights and this scenario">Copy setup link</button>
+          <button class="btn small" id="btn-import-scouting" type="button" title="Fill the cards from a scouting CSV you measured. Read on this machine only: nothing is uploaded, and no column is guessed.">Import scouting CSV</button>
+          <input type="file" id="inp-scouting" accept=".csv,text/csv,text/plain" class="visually-hidden" aria-label="Import a scouting CSV" />
           <button class="btn small ghost" id="btn-forget" type="button" title="Drop what this browser remembered, so the next load starts from the shipped rosters">Forget saved setup</button>
           <span class="hint" id="setup-store" role="status" aria-live="polite"></span>
         </div>

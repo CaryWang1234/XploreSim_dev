@@ -55,6 +55,7 @@ web/js/league.js    baselines, A/B harnesses, the weight evolution loop
 web/js/viz.js       canvas field rendering
 web/js/ui.js        panels, charts, replay transport, match export/import
 web/js/statestore.js  the setup as bytes: autosave and link, validated on the way back in
+web/js/scouting.js    scouting CSV in, cards out: the column contract, the units, the refusals
 web/js/worker-client.js  worker request lifecycle and recovery after a worker failure
 web/js/replay.js    time-based replay sampling that preserves resolution across repeated exports
 scripts/            the measurements above, plus serve.mjs and check_web.mjs
@@ -181,6 +182,32 @@ the declaration fires, `loose-at-t=0` falls by exactly the 96 pieces beyond the 
 FUEL came off the carpet, it was not invented), the AUTO winner flips and with it which HUB is dark in
 SHIFT 1 under Table 6-3, and the off switch is exact. No shipped card declares anything, so the calibration
 anchor, the mirror and the three golden digests are the same numbers they were.
+
+## Scouting CSV in, cards out
+
+`Import scouting CSV` fills the cards from a file the team already has, read on the machine — no upload,
+no network, no server, which is the rule this project keeps. The column contract is
+[`docs/scouting-example.csv`](/C:/Users/caryw/Desktop/codes/XploreSim_dev/docs/scouting-example.csv) and
+the accepted names are the table at the top of `web/js/scouting.js`; headers are matched case- and
+punctuation-insensitively (`Drive Speed`, `drive_speed`, `drivespeedips` are one column), metric columns
+arrive under their own names (`Speed m/s`, `Height cm`, `Pass Range (m)`) and are converted into the
+Manual's inches and seconds rather than read as inches.
+
+Two deliberate refusals. Aggregate numbers are not mapped: OPR and EPA are per-MATCH point totals, and a
+point here is either a FUEL in an active HUB or a TOWER level, so an alliance-level OPR cannot be split
+into a drive speed and a cycle rate without guessing which one the team is actually good at — a file that
+only carries aggregates imports with a named line per unusable column. And a value that does not fit is
+never silently absorbed: a mechanism the engine has no physics for is refused by name, a number outside
+the envelope the model can run is clamped *and said* (120 cm becomes a 30 in robot with a line about it),
+and a cell that is not a number skips its column instead of writing `Number('') === 0` onto a card. Rows
+land where a MATCH can field them: six rows fill both ALLIANCES, fewer fill the seat being planned, and
+the leftovers are reported rather than dropped.
+
+`scouting.js` touches no DOM, so `scripts/runtime.test.mjs` feeds it hostile text directly; `check_web.mjs`
+holds the rest (the example file still parses clean, and no column writes a field no card has). Walked
+through in headless Chromium: the file input, the notes line, the imported card being the card the next
+run uses, its declared AUTO reaching the engine (`26 → 26` in the flow ledger), and the import surviving
+a reload through the autosave. Harness: `.tmp/browser-scouting.mjs`.
 
 ## Two engines, on purpose
 

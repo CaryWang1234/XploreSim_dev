@@ -1,0 +1,4 @@
+team,name,mechanism,chassis,intakeSide,driver,driveSpeedIps,intakeRate,capacity,shootRate,shootAccuracy,passRangeIn,heightIn,weightLb,climbMax,climbTime,autoRoutine,plays
+9999,Example Scouter,turret,swerve,back,good,148,8.5,38,7.2,88,320,22,126,1,8,26,yes
+8888,Example Trench Bot,dumper,tank,front,average,124,7,52,9,82,180,21,131,0,0,18,yes
+7777,Example Bench Spare,dumper,swerve,back,rookie,112,6,30,5,75,140,24,120,2,12,0,no

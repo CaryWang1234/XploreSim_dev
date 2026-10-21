@@ -2,6 +2,7 @@
 
 import { TIME, POINTS, FIELD, FUEL, RULES, RULE_CONFLICTS, ROBOT_LIMITS, rpBars } from './rules.js';
 import { STORAGE_KEY, HASH_PREFIX, buildSetup, readSetup, encode, decode, toLink } from './statestore.js';
+import { parseScouting, placeRosters } from './scouting.js';
 import { SAMPLES, ARCHETYPES, MECHANISMS, STARTS, DRIVERS, CHASSIS, CHASSIS_OF, INTAKE_SIDES, derived, periodAt } from './model.js';
 import { DEFAULT_WEIGHTS } from './ai.js';
 import { FieldView } from './viz.js';
@@ -2463,6 +2464,36 @@ function restoreSetup() {
   if (problems.length) status(`Restored from ${source} with ${problems.length} fix(es): ${problems.join(' · ')}`, 'warn');
 }
 
+// Scouting CSV in, cards out. The file is read locally and never leaves the page; what comes back is a
+// note per column the model could not use, because a silently-ignored column is a card that is quietly
+// wrong, and the whole point of importing someone's measurements is not to have to guess which ones landed.
+async function importScouting(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const { rows, problems, unknown } = parseScouting(text);
+    const { rosters, notes } = placeRosters(rows, plannedSide(), state.rosters);
+    if (!rows.length) {
+      setupLine(`no usable rows in ${file.name}: ${problems[0] || 'empty file'}`, 'warn');
+      status(`Imported nothing from ${file.name}`, 'warn');
+      ev.target.value = '';
+      return;
+    }
+    state.rosters = rosters;
+    renderRoster('red');
+    renderRoster('blue');
+    renderTeams();
+    queueSave();
+    const remarks = [...notes, ...problems];
+    setupLine(`${rows.length} card(s) from ${file.name}${remarks.length ? ` · ${remarks.length} note(s), see the status line` : ''}`, remarks.length ? 'warn' : 'ok');
+    status(`Imported ${rows.length} ROBOT card(s)${unknown.length ? `; columns not read: ${unknown.join(', ')}` : ''}${remarks.length ? ` · ${remarks.slice(0, 3).join(' · ')}` : ''}`, remarks.length ? 'warn' : 'ok');
+  } catch (e) {
+    setupLine(`${file.name} could not be read (${e && e.name ? e.name : e})`, 'warn');
+  }
+  ev.target.value = '';
+}
+
 async function copySetupLink() {
   const setup = captureSetup();
   const { link, chars, error } = toLink(setup);
@@ -2528,6 +2559,8 @@ function boot() {
     if (el) el.addEventListener('change', queueSave);
   }
   $('btn-copy-link')?.addEventListener('click', () => void copySetupLink());
+  $('btn-import-scouting')?.addEventListener('click', () => $('inp-scouting')?.click());
+  $('inp-scouting')?.addEventListener('change', (ev) => void importScouting(ev));
   $('btn-forget')?.addEventListener('click', () => {
     try {
       localStorage.removeItem(STORAGE_KEY);

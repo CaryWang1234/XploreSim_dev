@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseScouting } from '../web/js/scouting.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const HTML = 'web/index.html';
@@ -226,6 +227,39 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   if (!store.includes("'cardLadder'")) fail('statestore.js does not carry the card ladder through the bytes');
   const pkg2 = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   if (!pkg2.scripts?.cards) fail('package.json has no `cards` script: whether the ladder fires is unmeasured');
+}
+
+// The scouting import is the same shape as everything else here: a pure parser that the Node tests can
+// feed hostile text, a thin UI wiring, and a documented column set. Two drift risks are worth a check
+// rather than a promise: a column that writes a field no card has (the row imports and the value goes
+// nowhere), and the example file growing a header the parser no longer recognises.
+{
+  const ui = fs.readFileSync(path.join(ROOT, JS_DIR, 'ui.js'), 'utf8');
+  const sc = fs.readFileSync(path.join(ROOT, JS_DIR, 'scouting.js'), 'utf8');
+  if (/\b(document|window|localStorage|fetch)\./.test(sc)) fail('scouting.js touches the DOM, storage or the network, so it cannot be tested headlessly');
+  for (const fn of ['parseScouting', 'placeRosters', 'COLUMN_DOC']) {
+    if (!sc.includes(`export ${fn === 'COLUMN_DOC' ? 'const' : 'function'} ${fn}`)) fail(`scouting.js no longer exports ${fn}`);
+  }
+  if (!ui.includes('from \'./scouting.js\'')) fail('ui.js does not import scouting.js, so the CSV button has no parser behind it');
+  for (const id of ['btn-import-scouting', 'inp-scouting']) {
+    if (!html.includes(`id="${id}"`)) fail(`#${id} is not in index.html`);
+    if (!ui.includes(`'${id}'`)) fail(`ui.js never asks for #${id}`);
+  }
+  const doc = path.join(ROOT, 'docs', 'scouting-example.csv');
+  if (!fs.existsSync(doc)) fail('docs/scouting-example.csv is missing: the column contract has no example');
+  else {
+    const parsed = parseScouting(fs.readFileSync(doc, 'utf8'));
+    if (parsed.unknown.length) fail(`docs/scouting-example.csv has header(s) the parser no longer reads: ${parsed.unknown.join(', ')}`);
+    if (parsed.problems.length) fail(`the example file does not import clean: ${parsed.problems.join(' / ')}`);
+    if (parsed.rows.length !== 3) fail(`the example file should carry three robots, parsed ${parsed.rows.length}`);
+  }
+  // Every field a column can write has to be a field a card actually has (or one of the four flat names
+  // the roster editor writes into a nested object).
+  const model = fs.readFileSync(path.join(ROOT, JS_DIR, 'model.js'), 'utf8');
+  const cardKeys = new Set([...(model.match(/^\s{2}([A-Za-z]+):/gm) || []).map((s) => s.trim().replace(/:$/, '')), 'climbMax', 'climbTime', 'cross', 'autoRoutine']);
+  for (const m of sc.matchAll(/^\s*\['[^']+',\s*'([A-Za-z]+)',/gm)) {
+    if (!cardKeys.has(m[1])) fail(`scouting.js writes "${m[1]}", which is not a field on a ROBOT card`);
+  }
 }
 
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
