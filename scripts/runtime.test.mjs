@@ -3,7 +3,11 @@ import test from 'node:test';
 import { createWorkerClient } from '../web/js/worker-client.js';
 import { monteCarlo, matchSeed } from '../web/js/mc.js';
 import { DEFAULT_WEIGHTS } from '../web/js/ai.js';
-import { SAMPLES } from '../web/js/model.js';
+import { SAMPLES, makeAlliance, defaultScenario } from '../web/js/model.js';
+import { simulateMatch } from '../web/js/engine.js';
+import { greedyPolicy, capOf } from '../web/js/league.js';
+import { hubActiveTable } from '../web/js/rules.js';
+import { makeContext, emptyPlan, evaluateMatch } from '../web/js/fastsim.js';
 import { FieldView } from '../web/js/viz.js';
 import { sampleReplay } from '../web/js/replay.js';
 import { modeBands, periodBands, robotRows, scoreSeries, sourceRows, strideOf, windowBands } from '../web/js/chartdata.js';
@@ -410,6 +414,118 @@ test('out-of-range and wrong-typed values are clamped or refused, and said out l
   assert.equal(setup.weights.defenseEfficacy, 0.9);
   assert.ok(problems.some((p) => p.includes('defenseEfficacy')));
   assert.equal(setup.weights.traversalOverhead, DEFAULT_WEIGHTS.traversalOverhead);
+});
+
+// A declared AUTO routine is the one place in this engine where the team's measurement replaces the
+// simulation rather than feeding it, so the tests are about the replacement being real: it has to fire,
+// it has to be the number that reaches the HUB, it has to move the thing an AUTO actually decides
+// (Table 6-3 gives the SHIFT windows to whoever scored less), and it has to leave the shipped build
+// exactly where it was when nobody declares anything.
+
+const cloneProfile = (p) => JSON.parse(JSON.stringify(p));
+const declaredTrio = (declared) =>
+  [SAMPLES[0], SAMPLES[1], SAMPLES[2]].map((p, i) => {
+    const q = cloneProfile(p);
+    q.auto = { ...(q.auto || {}), routineFuel: declared ? declared[i] : null };
+    return q;
+  });
+
+const play = (redDeclared, blueDeclared, opts = {}) => {
+  const sc = { ...defaultScenario(), seed: 5150, autoRoutine: opts.off ? false : undefined };
+  return simulateMatch({
+    redAlliance: makeAlliance(declaredTrio(redDeclared), 'red'),
+    blueAlliance: makeAlliance(declaredTrio(blueDeclared), 'blue'),
+    redPolicy: greedyPolicy('red'),
+    bluePolicy: greedyPolicy('blue'),
+    scenario: sc,
+    record: true,
+  });
+};
+
+test('a declared AUTO is what scores in AUTO, and nothing is invented to do it', () => {
+  const sim = play(null, null);
+  const dec = play(null, [40, 40, 40]);
+  assert.deepEqual(sim.robotStats.map((s) => s.autoRoutine), Array(6).fill(null), 'an undeclared card must not grow a routine');
+  const blue = dec.robotStats.filter((s) => s.alliance === 'blue');
+  for (const s of blue) {
+    assert.ok(s.autoRoutine, 'the declared card has no routine in the result');
+    assert.equal(s.autoRoutine.declared, 40);
+    assert.equal(s.autoRoutine.held, 40, 'the machine should start AUTO holding its whole declared load');
+    assert.equal(s.autoRoutine.overPreload, 32, 'only 8 of them (§6.3.4-C) could legally be preloaded');
+    assert.equal(s.autoRoutine.clampedTo, null, '65 FUEL of capacity holds 40 without clamping');
+    assert.ok(s.autoRoutine.banked > 0, 'the routine banked nothing, so the branch never fired');
+    assert.ok(s.autoRoutine.banked <= 40, `it banked ${s.autoRoutine.banked} of a declared 40`);
+  }
+  // Both HUBs are live during AUTO (§6.4.1), so the HUMAN PLAYER's feed lands in the same number the
+  // routines do. The routine's own accounting is exact: three declared 40s all go in.
+  assert.equal(blue.reduce((a, s) => a + s.autoRoutine.banked, 0), 120, 'a declared load that fits the machine should fire inside the 20 seconds');
+  assert.ok(dec.autoFuel.blue >= 120 && dec.autoFuel.blue <= 132, `autoFuel.blue ${dec.autoFuel.blue} is not 120 plus an HUMAN PLAYER feed`);
+  assert.ok(dec.autoFuel.blue > sim.autoFuel.blue, `the declaration did not beat the simulated AUTO (${sim.autoFuel.blue} → ${dec.autoFuel.blue})`);
+  // The FUEL came off the carpet, it was not conjured: three machines taking on 32 beyond their legal
+  // preload leaves 96 fewer pieces lying in the NEUTRAL ZONE at the whistle.
+  const looseAt0 = (r) => r.timeline[0].fuel.filter((f) => f[3] !== 4).length;
+  assert.equal(looseAt0(sim) - looseAt0(dec), 96, `loose FUEL at t=0 moved by ${looseAt0(sim) - looseAt0(dec)}, not 96`);
+});
+
+test('the declaration decides the SHIFT windows, which is what an AUTO is for', () => {
+  const sim = play(null, null);
+  const dec = play(null, [40, 40, 40]);
+  assert.equal(dec.autoWinner, 'blue', `declaring 120 AUTO FUEL on BLUE still did not win AUTO (${dec.autoWinner})`);
+  // Table 6-3: the AUTO winner sits its own HUB out in SHIFT 1, so the win has to show up as a dark HUB.
+  const shift1 = dec.timeline.find((f) => f.t >= 30.5 && f.t <= 32);
+  assert.equal(shift1.hub.blue, false, 'the AUTO winner was not INACTIVE in SHIFT 1');
+  assert.equal(shift1.hub.red, true, 'the AUTO loser was not live in SHIFT 1');
+  // And the same rule read the other way: the undeclared MATCH follows whatever its own AUTO decided.
+  const base1 = sim.timeline.find((f) => f.t >= 30.5 && f.t <= 32);
+  assert.notEqual(base1.hub[sim.autoWinner], true, `${sim.autoWinner} won the simulated AUTO and still got a live HUB`);
+});
+
+test('a routine over capacity is clamped and says so, and the kill switch is exact', () => {
+  const big = play(null, [200, 40, 40]);
+  const first = big.robotStats.find((s) => s.alliance === 'blue');
+  assert.equal(first.autoRoutine.declared, 200, 'the card stopped being what the user typed');
+  assert.equal(first.autoRoutine.held, first.capacity ?? 65, `a 200 declared load on a ${first.capacity}-capacity machine must be clamped`);
+  assert.equal(first.autoRoutine.clampedTo, first.capacity ?? 65, 'the clamp was not reported');
+  const off = play(null, [40, 40, 40], { off: true });
+  const sim = play(null, null);
+  assert.deepEqual(off.robotStats.map((s) => s.autoRoutine), Array(6).fill(null), 'the off value still built routines');
+  // sc.autoRoutine === false is the ablation arm: every number has to be the one the shipped build has.
+  assert.equal(off.final.red.total, sim.final.red.total);
+  assert.equal(off.final.blue.total, sim.final.blue.total);
+  assert.equal(off.autoFuel.blue, sim.autoFuel.blue);
+});
+
+test('the planner uses a declared AUTO instead of a cycle model it cannot see', () => {
+  const capsFor = (declared) => makeAlliance(declaredTrio(declared), 'red').robots.map(capOf);
+  const estimate = (caps) => {
+    const ctx = makeContext({
+      schedule: hubActiveTable('red'),
+      // `caps` is keyed by side: the same trio on both ALLIANCES, so the only difference between the
+      // three calls below is what each side declared for its AUTO.
+      caps: { red: caps, blue: caps },
+      event: 'regional',
+      objective: 'rs',
+      weights: DEFAULT_WEIGHTS,
+    });
+    return evaluateMatch(ctx, 'red', emptyPlan(), emptyPlan()).own.fuel;
+  };
+  const modelled = estimate(capsFor(null));
+  assert.equal(capsFor([40, 40, 40])[0].autoRoutine, 40, 'capOf dropped the declaration on the way to the planner');
+  assert.equal(capsFor(null)[0].autoRoutine, null);
+  const zero = estimate(capsFor([0, 0, 0]));
+  const mid = estimate(capsFor([40, 40, 40]));
+  const high = estimate(capsFor([60, 60, 60]));
+  const over = estimate(capsFor([200, 200, 200]));
+  // The declaration replaces the model rather than adding to it, so the estimate rises with what the team
+  // types. It rises by less than the arithmetic: both ALLIANCES draw on the same staged FUEL inside the
+  // model (`consume` empties the NEAR pile then the NEUTRAL one), so a machine that takes 20 more in AUTO
+  // leaves 20 fewer for its own partners to find later. Sub-additive is the right shape, not a bug.
+  assert.ok(mid > zero, `a bigger declared AUTO did not raise the estimate (${zero.toFixed(1)} → ${mid.toFixed(1)})`);
+  assert.ok(high > mid && high - mid <= 60, `+20 FUEL a machine moved the estimate by ${(high - mid).toFixed(2)}, outside 0-60`);
+  assert.ok(zero < modelled, `declaring an AUTO that scores nothing left the estimate at ${modelled.toFixed(1)}`);
+  // Past the hopper the declaration cannot go, and the ceiling is the machine's, not a made-up number.
+  assert.ok(Math.abs(over - estimate(capsFor([65, 65, 65]))) < 1e-9, 'a declared load over capacity is not capped by capacity');
+  assert.ok(over <= estimate(capsFor([64, 64, 64])) + 1e-9, `a 200 FUEL declaration beat a 64 FUEL hopper (${over.toFixed(1)})`);
 });
 
 test('a setup that cannot make a MATCH is refused rather than half-applied', () => {

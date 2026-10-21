@@ -190,7 +190,7 @@ export const DEFAULT_PROFILE = () => ({
   // l1/l2/l3 false and never climbs, which is the common case on top-tier ROBOTs.
   climb: { l1: true, l2: true, l3: true, timeSec: 8, attachTimeSec: 2.5 },
   // AUTO routine quality
-  auto: { fuelRate: 7.0, preloadShots: 8, accuracy: 0.75, climbLevel: 1, jitter: 0.12 },
+  auto: { fuelRate: 7.0, preloadShots: 8, accuracy: 0.75, climbLevel: 1, jitter: 0.12, routineFuel: null },
   // Interaction
   defenseSkill: 0.5, // 0..1 how well it can deny an opponent
   defensePower: 0.5, // 0..1 pushing mass / drivetrain torque

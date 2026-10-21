@@ -199,5 +199,26 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   }
 }
 
+// A declared AUTO crosses five files on the way to the page: the card holds it (`model.js`'s `auto`
+// block), the engine turns it into a held load and a `stat.autoRoutine` (`engine.js`), the capability
+// list carries it to the planner (`league.js` → `fastsim.js`), the result table prints it (`ui.js`), and
+// the autosave has to keep it through bytes (`statestore.js`, which stores it as the flat `autoRoutine`
+// because the card field is nested). Any one of those missing is a number that is silently not what the
+// user typed — the exact class of bug where a feature works in Node and reads as zero in the browser.
+{
+  const eng = fs.readFileSync(path.join(ROOT, JS_DIR, 'engine.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, JS_DIR, 'ui.js'), 'utf8');
+  const lg = fs.readFileSync(path.join(ROOT, JS_DIR, 'league.js'), 'utf8');
+  const fs2 = fs.readFileSync(path.join(ROOT, JS_DIR, 'fastsim.js'), 'utf8');
+  const store = fs.readFileSync(path.join(ROOT, JS_DIR, 'statestore.js'), 'utf8');
+  if (!eng.includes('autoRoutine: null')) fail('engine.js no longer declares autoRoutine on the per-ROBOT stat');
+  if (!eng.includes('rb.routine?.active')) fail('engine.js no longer gates the intake mouth and the shot accuracy on a live routine');
+  if (!lg.includes('autoRoutine: rb.auto?.routineFuel ?? null')) fail('league.js capOf does not carry the declared AUTO to the planner');
+  if (!fs2.includes('caps[i].autoRoutine')) fail('fastsim.js still models an AUTO the card has already measured');
+  if (!ui.includes('data-k="autoRoutine"')) fail('ui.js has no AUTO FUEL input on the card');
+  if (!ui.includes('s.autoRoutine')) fail('ui.js never reads autoRoutine, so the flow table prints an empty column');
+  if (!store.includes("'autoRoutine'")) fail('statestore.js does not round-trip the declared AUTO: a link or reload silently un-declares it');
+}
+
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
 process.exit(bad === 0 ? 0 : 1);

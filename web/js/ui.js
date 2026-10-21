@@ -233,6 +233,7 @@ function renderRoster(side) {
         <label>Drive speed in/s<input data-k="driveSpeedIps" type="number" step="2" value="${prof.driveSpeedIps}" /></label>
         <label>Intake FUEL/s<input data-k="intakeRate" type="number" step="0.1" value="${prof.intakeRate}" /></label>
         <label>Capacity FUEL<input data-k="capacity" type="number" step="1" value="${prof.capacity}" /></label>
+        <label title="What this machine's preprogrammed AUTO puts in the HUB, as you have measured it. Leave it blank and the engine simulates those 20 seconds: the machine drives, shoots at its modelled accuracy and takes what its mouth finds. Type a number and that load is what it starts the MATCH holding — only the first 8 of it could legally be preloaded (§6.3.4-C), the rest stands in for a pickup the engine is not asked to simulate — its AUTO shots are not re-rolled against a modelled accuracy because the number you typed IS the measurement, and the intake mouth stays shut for the 20 seconds so the declaration is the AUTO rather than a floor the emergent cycle can top. Whatever is still in the hopper at the whistle carries on into TELEOP like anything else. npm run probe prints what the simulated AUTO gives the shipped cards.">AUTO FUEL scored<input data-k="autoRoutine" type="number" step="1" min="0" max="120" placeholder="simulated" value="${prof.auto?.routineFuel ?? ''}" /></label>
         <label>Shoot rate FUEL/s<input data-k="shootRate" type="number" step="0.1" value="${prof.shootRate}" /></label>
         <label>Accuracy<input data-k="shootAccuracy" type="number" step="0.01" min="0.1" max="0.99" value="${prof.shootAccuracy}" /></label>
         <label title="How far a PASS actually carries. The shooter throws with one fixed punch, so a partner further than this is not reached: the FUEL comes down short, on the same line, wherever it lands. The front edges of the two ALLIANCE ZONES are 334 in apart and their middle lines 493 in, so throwing from inside the opponent's zone back to a partner in your own needs about 400-500 in. Nothing to do with a shot at the HUB, which has its own reference distance and accuracy falloff.">Pass range in<input data-k="passRangeIn" type="number" step="10" min="24" max="660" value="${prof.passRangeIn}" /></label>
@@ -320,6 +321,11 @@ function renderRoster(side) {
         const n = Number(v);
         p.climb = { ...p.climb, l1: n >= 1, l2: n >= 2, l3: n >= 3 };
         if (n >= 1 && !p.climb.timeSec) p.climb.timeSec = 8;
+      } else if (k === 'autoRoutine') {
+        // Blank is not zero: zero says "this machine scores nothing in AUTO", blank says "simulate it".
+        const raw = String(v).trim();
+        const n = Number(raw);
+        p.auto = { ...(p.auto || {}), routineFuel: raw === '' || !Number.isFinite(n) ? null : Math.max(0, Math.min(120, Math.round(n))) };
       } else {
         p[k] = Number(v);
       }
@@ -1568,10 +1574,11 @@ function renderFlow(r) {
   const rows = stats
     .map((s) => `<tr><td><span class="dot ${s.alliance}"></span>${s.alliance === 'red' ? 'RED' : 'BLUE'}</td><td>${esc(s.name)}</td>
       <td class="mono">${s.fuelCollected}</td><td class="mono">${mix(s)}</td><td class="mono">${s.fuelReclaimed}</td>
+      <td class="mono">${s.autoRoutine ? `${s.autoRoutine.declared} → ${s.autoRoutine.banked}${s.autoRoutine.clampedTo !== null ? ` (capacity ${s.autoRoutine.clampedTo})` : ''}` : '—'}</td>
       ${MODE_COLS.map((m) => `<td class="mono">${fmt(s.modeSec[m] || 0, 1)}s</td>`).join('')}
       <td class="mono">${ft(s.modeIn.SCORE || 0)}</td><td class="mono">${ft(s.distanceIn)}</td></tr>`)
     .join('');
-  host.innerHTML = `<thead><tr><th>Alliance</th><th>ROBOT</th><th class="mono">FUEL taken</th><th class="mono">Taken from: NEUTRAL / ZONE / FEED</th><th class="mono">Own HUB returns kept</th>${MODE_COLS.map((m) => `<th class="mono">${m} s</th>`).join('')}<th class="mono">SCORE ft</th><th class="mono">Drove ft</th></tr></thead><tbody>${rows}</tbody>`;
+  host.innerHTML = `<thead><tr><th>Alliance</th><th>ROBOT</th><th class="mono">FUEL taken</th><th class="mono">Taken from: NEUTRAL / ZONE / FEED</th><th class="mono">Own HUB returns kept</th><th class="mono">AUTO declared → banked</th>${MODE_COLS.map((m) => `<th class="mono">${m} s</th>`).join('')}<th class="mono">SCORE ft</th><th class="mono">Drove ft</th></tr></thead><tbody>${rows}</tbody>`;
 
   const stride = tl.length > 1 ? tl[1].t - tl[0].t : 0.1;
   const open = (side) => tl.reduce((a, f) => a + (f.hub[side] ? stride : 0), 0);
@@ -1588,7 +1595,7 @@ function renderFlow(r) {
     return `${side.toUpperCase()} took ${taken} FUEL (${from('neutral')} in the NEUTRAL ZONE, ${from('zone')} in its own, ${from('feed')} at the FEED outlet) while its HUB was open ${fmt(open(side), 1)}s of the ${fmt(tl.length * stride, 0)}s · ${scored} went into an active HUB against ${wasted} into a dark one, so ${eff}% of what reached the HUB reached a window · its own HUB handed ${back} back onto the FIELD and it took ${kept} of them, ${recl}%`;
   };
   $('flow-note').textContent =
-    `${line('red')} · ${line('blue')} · FUEL taken is one piece at the mouth, so the 8 a ROBOT starts with (§6.3.4-C) is not counted as taken. HUB returns are the FUEL that came back out of that ALLIANCE's own HUB (§5.4), and the share it took again is what says whether the HUB was feeding it or feeding the other side. This is the MATCH on the FIELD, not the batch.`;
+    `${line('red')} · ${line('blue')} · FUEL taken is one piece at the mouth, so the 8 a ROBOT starts with (§6.3.4-C) is not counted as taken, and neither is a declared AUTO — that column shows what was typed and what actually reached the HUB in the 20 seconds. HUB returns are the FUEL that came back out of that ALLIANCE's own HUB (§5.4), and the share it took again is what says whether the HUB was feeding it or feeding the other side. This is the MATCH on the FIELD, not the batch.`;
 }
 
 // ---------------------------------------------------------------------------------------------

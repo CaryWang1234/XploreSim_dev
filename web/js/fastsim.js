@@ -118,7 +118,12 @@ export function estimateAlliance(ctx, side, ownPlan, oppPlan, towerL1TeleopAllow
     }
     const c = cycleOf(caps[i], D_NEAR, w);
     const shots = Math.min(c.payload * ownPlan.auto.fuelTarget, (autoSec / c.cycle) * c.payload);
-    const made = shots * caps[i].accuracy;
+    // A card that declares its AUTO is a measurement, so the planner uses it: the engine fires that load
+    // with certainty and keeps the machine's mouth shut for the 20 seconds, which means the cycle model
+    // below would be planning a play the MATCH will not contain. Cards that declare nothing keep exactly
+    // the estimate this function has always returned.
+    const declared = caps[i].autoRoutine;
+    const made = declared === null || declared === undefined ? shots * caps[i].accuracy : Math.min(declared, caps[i].capacity);
     fuel += made;
     consume(made);
   }

@@ -746,6 +746,8 @@ export function simulateMatch(opts) {
           // `fuelCollected` already is one, and the 8 preloaded FUEL (§6.3.4-C) are not cycles.
           collectFrom: { neutral: 0, zone: 0, feed: 0 },
           fuelReclaimed: 0,
+          // A declared AUTO play, or null when the machine's 20 seconds are simulated the ordinary way.
+          autoRoutine: null,
           modeSec: { IDLE: 0, COLLECT: 0, STOCKPILE: 0, SCORE: 0, PASS: 0, PUSH: 0, DEFEND: 0, CLIMB: 0, FEED: 0 },
           modeIn: { IDLE: 0, COLLECT: 0, STOCKPILE: 0, SCORE: 0, PASS: 0, PUSH: 0, DEFEND: 0, CLIMB: 0, FEED: 0 },
         },
@@ -761,9 +763,32 @@ export function simulateMatch(opts) {
   const serveOrder = [robots, robots.filter((r) => r.alliance === 'blue').concat(robots.filter((r) => r.alliance === 'red'))];
 
   // Preload (§6.3.4-C, capped by G303-I): each ROBOT may start supporting up to 8 FUEL.
+  // A declared AUTO routine replaces the emergent 20 seconds with the team's own measurement: the
+  // machine starts the MATCH holding what its preprogrammed play is known to put in the HUB. Only the
+  // first 8 of them could legally be preloaded, so the rest stand in for a pickup the engine is not
+  // asked to simulate — the `routine` bucket in the FUEL ledger is what keeps that visible rather than
+  // quietly folded into the cycle count. Cards that declare nothing (`routineFuel` unset, which is every
+  // shipped preset) take the branch below exactly as before, so the calibration figures stand.
   for (const rb of robots) {
-    const pre = Math.min(FUEL.maxPreloadPerRobot, rb.capacity);
+    const declared = sc.autoRoutine === false ? null : rb.auto?.routineFuel ?? null;
+    const pre = declared !== null
+      ? Math.min(declared, rb.capacity)
+      : Math.min(FUEL.maxPreloadPerRobot, rb.capacity);
     rb.carrying = pre;
+    if (declared !== null) {
+      // One object, two names: the tick reads it as `rb.routine` and the result carries it as
+      // `stat.autoRoutine`, so the number the page prints is the number the engine incremented.
+      rb.stat.autoRoutine = {
+        declared,
+        held: pre,
+        // What the machine cannot legally hold at the whistle, counted as collected by the routine.
+        overPreload: Math.max(0, pre - FUEL.maxPreloadPerRobot),
+        clampedTo: declared > rb.capacity ? rb.capacity : null,
+        banked: 0,
+        active: true,
+      };
+      rb.routine = rb.stat.autoRoutine;
+    }
     for (let k = 0; k < pre && idx < total; k++, idx++) {
       fstate[idx] = 3;
       fholder[idx] = rb.idx;
@@ -1114,6 +1139,10 @@ export function simulateMatch(opts) {
     rb.intakeAcc = Math.min(2, (rb.intakeAcc || 0) + rate * dt);
     const budget = Math.floor(rb.intakeAcc);
     if (budget <= 0 || rb.carrying >= rb.capacity) return 0;
+    // A declared AUTO is a preprogrammed play with a measured outcome, so during those 20 s the machine
+    // fires the load it was given and does not go looking for more. Without this the declaration would
+    // be a floor the emergent cycle could top, and the number on the card would stop being the number.
+    if (rb.routine?.active) return 0;
     const cap = Math.min(budget, rb.capacity - rb.carrying);
     const rc = clamp(Math.floor(rb.x / cell), 0, gw - 1);
     const ry = clamp(Math.floor(rb.y / cell), 0, gh - 1);
@@ -1317,6 +1346,11 @@ export function simulateMatch(opts) {
     // undefended simulation.
     acc *= 1 - 0.5 * rb.defensePressure;
     acc = clamp(acc, 0.08, 0.99);
+    // The declared load is a measurement of what the routine puts in the HUB, so its shots are not
+    // re-rolled against a modelled accuracy on top of the number the team typed. Defence is still 0 in
+    // AUTO (§7 contact starts at TRANSITION), so nothing here is a free pass the engine did not already
+    // give an undeclared auto.
+    if (rb.routine?.active) acc = 1;
     for (let i = 0; i < total; i++) {
       if (fstate[i] === 3 && fholder[i] === rb.idx) {
         fstate[i] = 4;
@@ -1766,7 +1800,15 @@ export function simulateMatch(opts) {
       if (!rb) hps[target].stat.hits += 1;
       if (hubActive(target, t)) {
         score[target].fuel += POINTS.fuelActiveHub;
-        if (t < TIME.autoSec + TIME.autoScoreGraceSec) autoFuel[target] += 1;
+        if (t < TIME.autoSec + TIME.autoScoreGraceSec) {
+          autoFuel[target] += 1;
+          // Counted on the shooter, not in the FUEL-source ledger: a declared load never passed the
+          // intake mouth, exactly like the legal preload, and `fuelCollected` means "pieces taken at the
+          // mouth" on purpose (see the note on the stat object). Keeping it a separate number is what
+          // lets `verify.mjs` hold the source columns summing to `fuelCollected` unchanged.
+          const shooter = fshooter[i] >= 0 ? robots[fshooter[i]] : null;
+          if (shooter?.routine?.active) shooter.routine.banked += 1;
+        }
         if (rb) rb.stat.fuelScored += 1;
       } else {
         score[target].fuelInactive += 1;
@@ -1888,6 +1930,10 @@ export function simulateMatch(opts) {
                 : 'blue';
         hubSchedule = hubActiveTable(autoWinner);
         log(t, 'hubSchedule', { autoWinner, autoFuel: { ...autoFuel } });
+        // The declared play is over. From here the machine is an ordinary ROBOT: mouth open, shots
+        // re-rolled against its accuracy, and anything it still holds from the routine fires like
+        // anything else rather than counting as AUTO.
+        for (const rb of robots) if (rb.routine) rb.routine.active = false;
       }
       for (const side of ['red', 'blue']) {
         if (policies[side].onPeriodStart) policies[side].onPeriodStart(p, makeObs(t));

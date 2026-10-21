@@ -202,6 +202,10 @@ export function capOf(rb) {
     canTrench: rb.canTrench,
     reliability: rb.reliability,
     team: rb.team,
+    // A declared AUTO play, if the card carries one. The search plans its 20 seconds against this
+    // instead of against the cycle model, because the engine is not going to simulate that model for a
+    // machine whose routine has been measured (see `fastsim.js`'s AUTO block and `releaseShot`).
+    autoRoutine: rb.auto?.routineFuel ?? null,
   };
 }
 

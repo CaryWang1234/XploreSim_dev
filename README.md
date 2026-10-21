@@ -157,6 +157,30 @@ into an open tab applies without a reload, garbage/an-old-version/a `__proto__` 
 with a reason and a working page, and **Forget saved setup** drops both halves. Harness:
 `.tmp/browser-setup.mjs` (needs a local Chromium, so it is not part of `npm run validate`).
 
+## A declared AUTO replaces the simulated 20 seconds
+
+The engine's own AUTO is the one place the build is known to be low: `npm run probe` reads ≈97 FUEL an
+ALLIANCE against 111-177 at the real Einstein Finals, because a real auto is a preprogrammed play whose
+outcome a team has *measured*, not a cycle the physics has to rediscover. Each card therefore has an
+**AUTO FUEL scored** box. Blank means the ordinary simulation. A number means that machine starts AUTO
+holding that load, its shots in those 20 s are not re-rolled against a modelled accuracy (the typed
+number is the measurement), its intake mouth stays shut so the declaration is the AUTO rather than a floor
+the emergent cycle can top, and whatever is still in the hopper at the whistle carries into TELEOP like
+anything else. `capOf` carries it to `fastsim.js`, so the plan is searched against the AUTO the MATCH will
+actually contain instead of the cycle estimate — and inside the model the step is deliberately
+sub-additive, because both ALLIANCES draw on the same staged FUEL.
+
+Three things are true because of how it is modelled, and the page says them rather than hiding them: only
+the first 8 of a declared load could legally be preloaded (§6.3.4-C), so the rest stands in for a pickup
+the engine is not asked to simulate — which is why it is its own ledger column (`AUTO declared → banked`)
+instead of a number folded into `fuelCollected`, whose three source columns still sum to it exactly; the
+load is clamped by the machine's capacity and the clamp is reported; and `sc.autoRoutine === false` is the
+off value, which reproduces the undeclared MATCH to the point. `scripts/runtime.test.mjs` holds all of it:
+the declaration fires, `loose-at-t=0` falls by exactly the 96 pieces beyond the three legal preloads (the
+FUEL came off the carpet, it was not invented), the AUTO winner flips and with it which HUB is dark in
+SHIFT 1 under Table 6-3, and the off switch is exact. No shipped card declares anything, so the calibration
+anchor, the mirror and the three golden digests are the same numbers they were.
+
 ## Two engines, on purpose
 
 `engine.js` is the truth: a tick loop with positions, hopper counts, mouths, flight and collisions.
@@ -217,7 +241,10 @@ Stated on the page too, because a planner is used to make decisions:
 
 - AUTO scoring is low: the engine puts ≈97 FUEL in during AUTO (92.4 red, 100.8 blue over 12 MATCHes,
   and `autoWinner: 'auto'` resolves that from the simulation, so a 12-MATCH probe does not split it
-  evenly) where real Einstein Finals alliances managed 111-177.
+  evenly) where real Einstein Finals alliances managed 111-177. The fix for a specific team is the
+  card's **AUTO FUEL scored** box, which replaces those 20 seconds with the measurement instead of the
+  model — see "A declared AUTO". It is not a fix for the anchor: the shipped cards declare nothing, so
+  this gap is still what the calibration is measured against.
 - TELEOP throughput is high: 5.36 FUEL/s per alliance against ≈4.7 in the real finals.
 - The YELLOW/RED CARD ladder is not priced. A second YELLOW in a phase is a DISQUALIFICATION and its
   tournament cost is outside the model (`sc.contactFouls`).

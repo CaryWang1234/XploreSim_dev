@@ -64,7 +64,7 @@ const BOOLEAN = ['plays', 'canBump', 'canTrench'];
 // What a card may hold at all: every field DEFAULT_PROFILE declares, plus the four names the roster
 // editor's selects write — `cross`, `climbMax`, `climbTime`, `attachTimeSec` — which are unpacked below
 // into `climb` and the canBump/canTrench pair rather than stored under those keys.
-const PROFILE_KEYS = new Set([...Object.keys(DEFAULT_PROFILE()), 'cross', 'climbMax', 'climbTime', 'attachTimeSec']);
+const PROFILE_KEYS = new Set([...Object.keys(DEFAULT_PROFILE()), 'cross', 'climbMax', 'climbTime', 'attachTimeSec', 'autoRoutine']);
 
 const SCENARIO_KEYS = ['objective', 'event', 'autoWinner', 'towerL1TeleopAllowed', 'faultsEnabled', 'contactFouls'];
 const SCENARIO_CHOICE = {
@@ -91,6 +91,11 @@ export function packProfile(prof) {
   const level = prof.climb?.l3 ? 3 : prof.climb?.l2 ? 2 : prof.climb?.l1 ? 1 : 0;
   if (level !== climbLevelOf(base)) diff.climbMax = level;
   if ((prof.climb?.timeSec ?? 0) !== (base.climb?.timeSec ?? 0)) diff.climbTime = prof.climb?.timeSec ?? 0;
+  // The declared AUTO lives inside the nested `auto` block, so it travels as its own flat name; null is
+  // the difference between "simulate the 20 seconds" and "this machine scores N in AUTO", and a diff that
+  // dropped it would silently turn a declared routine back into a simulated one.
+  const routine = prof.auto?.routineFuel ?? null;
+  if (routine !== (base.auto?.routineFuel ?? null)) diff.autoRoutine = routine;
   if (prof.team !== base.team) diff.team = prof.team;
   if (prof.name !== base.name) diff.name = prof.name;
   return idx >= 0 ? { p: idx, d: diff } : { p: -1, d: { ...stripProvenance(base), ...diff } };
@@ -156,6 +161,12 @@ export function unpackProfile(row, problems) {
     const t = Number(d.climbTime);
     if (isFiniteNumber(t) && t >= 0 && t <= 30) out.climb = { ...(out.climb || {}), timeSec: t };
     else problems.push(`climbTime ${d.climbTime} is outside 0-30 s; kept ${out.climb?.timeSec ?? 0}`);
+  }
+  if ('autoRoutine' in d) {
+    const v = d.autoRoutine;
+    if (v === null) out.auto = { ...(out.auto || {}), routineFuel: null };
+    else if (isFiniteNumber(Number(v)) && Number(v) >= 0 && Number(v) <= 120) out.auto = { ...(out.auto || {}), routineFuel: Math.round(Number(v)) };
+    else problems.push(`autoRoutine ${JSON.stringify(v)} is neither null nor 0-120; that card's AUTO stays simulated`);
   }
   if (typeof d.attachTimeSec === 'number' && isFiniteNumber(d.attachTimeSec)) out.climb = { ...(out.climb || {}), attachTimeSec: d.attachTimeSec };
   if (Number.isInteger(d.team) && d.team >= 0 && d.team <= 99999) out.team = d.team;
