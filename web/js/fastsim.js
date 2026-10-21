@@ -7,7 +7,7 @@
 // collapsed to two distances. Agreement with the engine is measured and reported in the
 // benchmark panel rather than assumed.
 
-import { TIME, POINTS, FIELD } from './rules.js';
+import { TIME, POINTS, FIELD, rpBars } from './rules.js';
 
 export const ROLE = { SCORE: 'SCORE', DEFEND: 'DEFEND', CLIMB: 'CLIMB' };
 export const PERIODS = ['AUTO', 'TRANSITION', 'SHIFT 1', 'SHIFT 2', 'SHIFT 3', 'SHIFT 4', 'END GAME'];
@@ -37,11 +37,7 @@ export function makeContext({ schedule, caps, event, objective, weights }) {
     event,
     objective,
     weights,
-    thresholds: {
-      energized: event === 'districtChamp' ? POINTS.rpThreshold.energized.districtChamp : POINTS.rpThreshold.energized.regional,
-      supercharged: POINTS.rpThreshold.supercharged.regional,
-      traversal: POINTS.rpThreshold.traversal.regional,
-    },
+    thresholds: rpBars(event),
   };
 }
 

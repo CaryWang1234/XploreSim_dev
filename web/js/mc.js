@@ -2,7 +2,7 @@
 // model) so the reported win probability, score spread and Ranking-Point probabilities come from
 // the same code that produces the replay.
 
-import { POINTS } from './rules.js';
+import { rpBars } from './rules.js';
 import { defaultScenario, makeAlliance } from './model.js';
 import { simulateMatch } from './engine.js';
 import { createAI } from './policy.js';
@@ -97,6 +97,9 @@ export function monteCarlo(opts) {
   };
   let recorded = null;
   let plan = null;
+  // Which Table 6-5 columns the engine actually graded against. Read off the MATCH rather than
+  // re-derived here, so a DCMP batch cannot be captioned with the regional bars it did not use.
+  let bars = null;
   // One row per MATCH: what it scored and which seed scored it, so the page can name the MATCH at the end of a
   // distribution and replay it. The frames are not kept — a thousand of them would be the bulk of the page's
   // memory, and every one is reproducible from the seed in this row.
@@ -140,6 +143,7 @@ export function monteCarlo(opts) {
     const oSide = aSide === 'red' ? 'blue' : 'red';
     const a = res.final[aSide];
     const o = res.final[oSide];
+    if (!bars) bars = a.rp.thresholds;
     agg.matches += 1;
     agg.redTotal += res.final.red.total;
     agg.blueTotal += res.final.blue.total;
@@ -159,7 +163,7 @@ export function monteCarlo(opts) {
     const delta = a.total - o.total;
     agg.deltaHist[Math.min(10, Math.max(0, Math.floor((delta + 250) / 50)))] += 1;
     agg.marginTotal += delta;
-    rows.push({ n: i + 1, seed: sc.seed, ai: a.total, opp: o.total, margin: delta, foulsGiven: o.foulPoints });
+    rows.push({ n: i + 1, seed: sc.seed, ai: a.total, opp: o.total, margin: delta, foulsGiven: o.foulPoints, fuel: a.fuel, tower: a.towerTotal });
     agg.foulsWon += a.foulPoints;
     agg.foulsGiven += o.foulPoints;
     agg.aiAutoFuel += (res.autoFuel && res.autoFuel[aSide]) || 0;
@@ -262,7 +266,7 @@ export function monteCarlo(opts) {
       expected: pct(agg.rp.total),
     },
     autoWinRate: pct(agg.autoWinnerIsAi),
-    thresholds: POINTS.rpThreshold,
+    thresholds: bars || rpBars(base.event),
     recorded,
     plan,
   };

@@ -3,7 +3,7 @@
 // executes, adjudicates and scores. Keeping decisions out of the engine means the same engine
 // can score a hand-written plan, a naive bot, or the search-based AI without favouring either.
 
-import { TIME, POINTS, FUEL, FIELD, hubActiveTable } from './rules.js';
+import { TIME, POINTS, FUEL, FIELD, hubActiveTable, rpBars } from './rules.js';
 import { periodAt, defaultScenario } from './model.js';
 import { makeRng } from './rng.js';
 
@@ -2698,15 +2698,16 @@ export function simulateMatch(opts) {
       total: totals(side).total,
     };
   }
-  const th = POINTS.rpThreshold;
+  const th = rpBars(sc.event);
   for (const side of ['red', 'blue']) {
     const f = result.final[side];
-    const energizedReq = sc.event === 'districtChamp' ? th.energized.districtChamp : th.energized.regional;
     const rp = {
-      energized: f.fuel >= energizedReq ? 1 : 0,
-      supercharged: f.fuel >= th.supercharged.regional ? 1 : 0,
-      traversal: f.towerTotal >= th.traversal.regional ? 1 : 0,
-      thresholds: { energized: energizedReq, supercharged: th.supercharged.regional, traversal: th.traversal.regional },
+      energized: f.fuel >= th.energized ? 1 : 0,
+      supercharged: f.fuel >= th.supercharged ? 1 : 0,
+      traversal: f.towerTotal >= th.traversal ? 1 : 0,
+      // The bars this MATCH was actually graded against, carried with the verdict so nothing
+      // downstream has to re-derive the event tier from a string it no longer has.
+      thresholds: th,
       result: 0,
     };
     const opp = result.final[other(side)].total;

@@ -2,7 +2,7 @@
 // rules/accounting paths without any AI help. Invariant failures throw; magnitudes are printed
 // so the numbers can be compared against the manual's thresholds (Table 6-5).
 
-import { TIME, POINTS, FUEL, FIELD } from '../web/js/rules.js';
+import { TIME, POINTS, FUEL, FIELD, rpBars } from '../web/js/rules.js';
 import { defaultScenario, makeAlliance, makeRobot, SAMPLES, periodAt } from '../web/js/model.js';
 import { simulateMatch, INTENT, GEO, CONTACT_UNABLE_SEVERITY, segmentBoxEntry, bandAtX, bandRegionOf, BUMP_TRENCH_SEAM_IN } from '../web/js/engine.js';
 import { monteCarlo, matchSeed } from '../web/js/mc.js';
@@ -1300,5 +1300,10 @@ batchLadderChecks(20260110);
 const totalMs = Date.now() - t0;
 summarize(rows);
 console.log(`\ntiming: ${greedyMs.toFixed(1)} ms a greedy MATCH (${TIME.matchSec / 0.1} ticks of one engine); this whole run took ${(totalMs / 1000).toFixed(1)} s for its 30 MATCHes plus every check above`);
-console.log('declared FUEL staged', FUEL.stagedTotal, '| ENERGIZED threshold', POINTS.rpThreshold.energized.regional, '| SUPERCHARGED', POINTS.rpThreshold.supercharged.regional);
+// Both Table 6-5 columns, named as columns — printing one of them bare is how a DCMP batch ended up
+// captioned with the bar it was not graded against. Which of these a rung can still move is measured
+// by `npm run rp`, not asserted here.
+const reg = rpBars('regional');
+const dcmp = rpBars('districtChamp');
+console.log(`declared FUEL staged ${FUEL.stagedTotal} | Table 6-5: ENERGIZED ${reg.energized} regional / ${dcmp.energized} district CHAMPIONSHIP, SUPERCHARGED ${reg.supercharged}, TRAVERSAL ${reg.traversal}`);
 console.log('\nOK: engine invariants hold.');

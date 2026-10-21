@@ -17,7 +17,7 @@ npm run check      # encoding, index.html tag balance, every module parses
 npm run verify     # engine invariants (no FUEL invented, no shot from outside the ALLIANCE ZONE, …)
 npm run golden     # replay three pinned MATCHes and compare digests with scripts/golden.json
 npm test           # worker recovery, replay export, input guards, and renderer cache regression tests
-npm run validate   # check + test + verify + golden
+npm run validate   # check + test + verify + rp + golden
 ```
 
 Every number the site states is reproducible from a committed script:
@@ -34,6 +34,7 @@ Every number the site states is reproducible from a committed script:
 | `npm run team` | the bunching proxies behind `mateSeparation` |
 | `npm run cap` | the four capability probes: doomed tail trips, post-fault behaviour, nose/aim error, FUEL caught off its own lane at a window reopen |
 | `npm run defcal` | what one defender in a shooting lane actually costs the opponent, with both sides' plans pinned so no search is involved |
+| `npm run rp` | which Table 6-5 rungs can still move: the reach rate and the term spread on both arms, against what the objective claims to weight. Part of `npm run validate` |
 | `npm run bench` / `npm run train` | baseline ladder / weight evolution with a holdout gate |
 | `npm run night` | the multi-core version of `train`: 150 MATCHes per evaluation, paired differences, a wiring probe, named hypotheses, a pattern-search arm and a blind-mutation arm, then a gate on layouts it never searched. `HOURS=`, `MATCHES=`, `CORES=`, `LAMBDA=`, `OUT_DIR=`; writes to `.tmp/night/` and changes nothing in `web/` |
 
@@ -120,6 +121,14 @@ rebuilds the background. The HUD updates its phase and HUB markup only when thos
 These changes affect presentation and task handling; the physics, rule constants and policy weights
 remain covered by the existing invariant and golden-replay checks.
 
+Table 6-5 prints a column per event tier, so a bar is only defined together with the tier. `rules.js`
+owns the columns and everything else reads them through `rpBars(event)`: the engine grades the MATCH
+against that column and carries the bar out with the verdict, `mc.js` hands that same bar to the page,
+and the objective divides by it too, so a district-CHAMPIONSHIP batch cannot be captioned with the
+regional number it did not use — which is how this build shipped. `scripts/check_web.mjs` fails any
+module outside `rules.js` that names a column, and `scripts/rp.test.mjs` checks the graded bar, the
+exported bar and the printed bar against a real MATCH.
+
 ## Two engines, on purpose
 
 `engine.js` is the truth: a tick loop with positions, hopper counts, mouths, flight and collisions.
@@ -158,6 +167,15 @@ The rules this repo has learned the hard way, all of them from a figure that tur
   ends of its domain on one MATCH set and drops any axis where not a single MATCH finishes differently.
   The engine is deterministic, so a zero there means the branch was never reachable in the sampled play —
   a number in the weight vector is not the same thing as a strategy dial.
+- **A term that cannot move is not a term.** `smoothUtility` weighted all three Table 6-5 rungs. `npm run rp`
+  measures the reach rate and the term spread on both arms: ENERGIZED and SUPERCHARGED are reached in
+  100.0% of MATCHes (FUEL p10 529 against bars of 100 and 360 — and the 240 district-CHAMPIONSHIP column
+  too), so `min(1, fuel/bar)` was exactly 1 for every candidate and 1.7 of the objective's 5.5 maximum
+  selected between nobody, while TRAVERSAL is reached in 0% of MATCHes but its term still separates a
+  climbing alliance from one that is not. The two FUEL terms are muted and the audit fails in both
+  directions — live-and-constant is dead weight, muted-and-moving is a signal thrown away. Muting them
+  moved no published number: old-minus-new is exactly 1.7000000000 across the 96 greedy MATCHes and no
+  searching-seat MATCH came near the bar, so every fitness *difference* quoted here is the same difference.
 - **Measure the null before trusting a difference.** `fitnessTrace` returns the per-MATCH utilities so a
   candidate and the incumbent can be differenced MATCH by MATCH on identical layouts, and the run prints
   the paired difference of a vector against itself first (it must be 0.000±0.000). What that pairing
@@ -177,6 +195,12 @@ Stated on the page too, because a planner is used to make decisions:
   tournament cost is outside the model (`sc.contactFouls`).
 - TRAVERSAL RP is rarely reached, so the TOWER ladder is softer than a real elite alliance's.
 - The HUMAN PLAYER is a throw rate and an accuracy, not a person.
+- Both FUEL rungs are free at this throughput: every MATCH of both arms clears ENERGIZED (100) and
+  SUPERCHARGED (360), and the 240 district-CHAMPIONSHIP column as well (`npm run rp`). A simulated
+  elite alliance therefore banks 2 of its 4 BONUS RPs before it has made a decision, and only WIN and
+  TRAVERSAL are live as reward. Whether the real top field also sweeps both columns every MATCH is not
+  measured here — the calibration anchors are scores, not RP lines — but inside this simulator the
+  rung cannot discriminate, which is why the search objective no longer pretends it does.
 
 ## Calibration anchors
 

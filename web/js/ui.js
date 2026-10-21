@@ -1,6 +1,6 @@
 // App wiring: roster editing, running the AI in a worker, playback, and the tactical read-out.
 
-import { TIME, POINTS, FIELD, FUEL, RULES, RULE_CONFLICTS, ROBOT_LIMITS } from './rules.js';
+import { TIME, POINTS, FIELD, FUEL, RULES, RULE_CONFLICTS, ROBOT_LIMITS, rpBars } from './rules.js';
 import { SAMPLES, ARCHETYPES, MECHANISMS, STARTS, DRIVERS, CHASSIS, CHASSIS_OF, INTAKE_SIDES, derived, periodAt } from './model.js';
 import { DEFAULT_WEIGHTS } from './ai.js';
 import { FieldView } from './viz.js';
@@ -989,8 +989,8 @@ function renderResult(res, ctx = {}) {
   $('prob-cards').innerHTML = [
     ['Win rate (ties half)', pct(r.winRate), `${r.wins}W / ${r.losses}L / ${r.ties}T  ·  ${matches} ${matches === 1 ? 'match' : 'matches'}`],
     ['AI average score', fmt(r.avgAiScore, 0), `opponent ${fmt(r.avgOppScore, 0)} · margin ${sign(r.avgMargin)}${fmt(Math.abs(r.avgMargin), 0)}`],
-    ['Average FUEL in the HUB', fmt(r.avgFuel, 0), `SUPERCHARGED needs ${r.thresholds.supercharged.regional}`],
-    ['Average TOWER points', fmt(r.avgTower, 0), `TRAVERSAL needs ${r.thresholds.traversal.regional}`],
+    ['Average FUEL in the HUB', fmt(r.avgFuel, 0), `SUPERCHARGED needs ${r.thresholds.supercharged}`],
+    ['Average TOWER points', fmt(r.avgTower, 0), `TRAVERSAL needs ${r.thresholds.traversal}`],
     ['Chance of winning AUTO', pct(r.autoWinRate), 'the AUTO winner sits out SHIFT 1 (Table 6-3)'],
     ['Expected ranking points', fmt(r.rpProb.expected, 2), 'the only thing qualification ranking looks at'],
   ]
@@ -1006,9 +1006,9 @@ function renderResult(res, ctx = {}) {
   barChart($('chart-margin'), r.deltaHist, mLabels, '#7ad0a6');
 
   const rpRows = [
-    ['ENERGIZED RP', r.rpProb.energized, `FUEL into the active HUB ≥ ${r.thresholds.energized.regional}`],
-    ['SUPERCHARGED RP', r.rpProb.supercharged, `FUEL into the active HUB ≥ ${r.thresholds.supercharged.regional}`],
-    ['TRAVERSAL RP', r.rpProb.traversal, `TOWER points ≥ ${r.thresholds.traversal.regional}`],
+    ['ENERGIZED RP', r.rpProb.energized, `FUEL into the active HUB ≥ ${r.thresholds.energized}`],
+    ['SUPERCHARGED RP', r.rpProb.supercharged, `FUEL into the active HUB ≥ ${r.thresholds.supercharged}`],
+    ['TRAVERSAL RP', r.rpProb.traversal, `TOWER points ≥ ${r.thresholds.traversal}`],
     ['Win RP', r.rpProb.win, 'win 3 points / tie 1'],
   ];
   $('rp-list').innerHTML = rpRows
@@ -1202,6 +1202,7 @@ function renderPlan(plan, res) {
   const lanes = Object.entries(plan.climbLanes || {})
     .map(([slot, lvl]) => `ROBOT ${Number(slot) + 1} → LEVEL ${lvl}`)
     .join(', ');
+  const bars = rpBars(scenarioOverride().event);
   const towerPts = (climb.levels || []).slice(0, climb.count).reduce((a, l) => a + (l === 1 ? (scenarioOverride().towerL1TeleopAllowed ? POINTS.tower.l1Teleop : 0) : l === 2 ? POINTS.tower.l2Teleop : POINTS.tower.l3Teleop), 0);
   host.innerHTML = `
     <div class="table-wrap"><table><thead><tr><th>Role by shift · ${aiSide.toUpperCase()}</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>
@@ -1210,7 +1211,7 @@ function renderPlan(plan, res) {
     </p>
     <p class="hint">
       END GAME climb ladder: ${climb.count === 0 ? 'no climb' : `${lanes} (starts at ${fmt(climb.startAt, 0)}s)`},
-      TOWER total ${towerPts} points → TRAVERSAL RP (≥${POINTS.rpThreshold.traversal.regional}) ${towerPts >= POINTS.rpThreshold.traversal.regional ? '<b style="color:var(--good)">met</b>' : '<b style="color:var(--warn)">not met</b>'}.
+      TOWER total ${towerPts} points → TRAVERSAL RP (≥${bars.traversal}) ${towerPts >= bars.traversal ? '<b style="color:var(--good)">met</b>' : '<b style="color:var(--warn)">not met</b>'}.
     </p>
     <p class="hint">MCTS search: ${plan.stats ? plan.stats.rollouts : 0} rollouts across ${plan.stats ? plan.stats.calls : 0} decision points.</p>`;
 }
@@ -1244,13 +1245,21 @@ function renderInsights(r) {
     text: `<b>AUTO cuts both ways.</b> This match gave AUTO to ${winner}. Under Table 6-3 the alliance that scores more in AUTO has an <b>inactive</b> HUB in SHIFT 1 and SHIFT 3 (shots score 0), while the other alliance gets the first scoring window in SHIFT 1 and SHIFT 3. So winning AUTO is not always good: it buys AUTO points and sells the first scoring window.`,
   });
 
-  if (r.rpProb.energized < 0.95) {
-    list.push({ tone: 'warn', text: `<b>ENERGIZED RP is shaky (${Math.round(r.rpProb.energized * 100)}%).</b> The bar is ≥ ${th.energized.regional} FUEL in the active HUB, and this plan averages ${fmt(r.avgFuel, 0)}. Close the gap with a faster cycle (capacity × accuracy) or a longer effective window.` });
-  } else {
-    list.push({ tone: 'good', text: `<b>ENERGIZED RP is safe.</b> Average ${fmt(r.avgFuel, 0)} FUEL ≥ the ${th.energized.regional} bar.` });
-  }
-  if (r.rpProb.supercharged < 0.5) {
-    list.push({ tone: 'info', text: `<b>SUPERCHARGED (≥ ${th.supercharged.regional} FUEL) is out of reach.</b> Three robots would have to put up ${th.supercharged.regional} inside the active windows, a sustained ~${fmt((th.supercharged.regional / 110) * 60, 0)} per minute. Do not trade consistency for it in qualification.` });
+  // A rung the batch reaches in every MATCH is a fact about this build's throughput, not a decision the
+  // plan made, so it is printed as one and the line names what the batch is actually trading against.
+  // The measurement behind muting those rungs in the search objective is `node scripts/rp.mjs`.
+  for (const [label, key, bar] of [
+    ['ENERGIZED', 'energized', th.energized],
+    ['SUPERCHARGED', 'supercharged', th.supercharged],
+  ]) {
+    const p = r.rpProb[key];
+    if (p >= 0.95) {
+      list.push({ tone: 'good', text: `<b>${label} RP (FUEL ≥ ${bar}) is automatic in this build: ${Math.round(p * 100)}% of the batch, ${fmt(r.avgFuel, 0)} FUEL a match.</b> No plan can lose it, so it is not what the recommendation is trading against — the WIN and TRAVERSAL rungs are.` });
+    } else if (p > 0.05) {
+      list.push({ tone: 'warn', text: `<b>${label} RP (FUEL ≥ ${bar}) lands in ${Math.round(p * 100)}% of this batch.</b> The plan averages ${fmt(r.avgFuel, 0)} FUEL. A faster cycle (capacity × accuracy) or a longer effective window is what moves it.` });
+    } else {
+      list.push({ tone: 'info', text: `<b>${label} RP (FUEL ≥ ${bar}) is out of reach: ${Math.round(p * 100)}% of the batch.</b> At ${fmt(r.avgFuel, 0)} FUEL a match it needs a sustained ${fmt((bar / 110) * 60, 0)} per minute inside the active windows. Do not trade consistency for it in qualification.` });
+    }
   }
 
   // The only external check on whether a recommended margin is real: how the simulated score
@@ -1305,7 +1314,7 @@ function renderInsights(r) {
     0,
   );
   if (!aiRoster.length) {
-    list.push({ tone: 'info', text: `<b>TRAVERSAL RP is off the table.</b> All three AI robots are set to no climb, so TOWER points stay at 0 and cannot reach ${th.traversal.regional}. That is normal for this season's top teams: leaving the whole 30-second END GAME in the FUEL cycle is usually worth more. To price a climb, set one robot's max climb to L1 or higher and run again.` });
+    list.push({ tone: 'info', text: `<b>TRAVERSAL RP is off the table.</b> All three AI robots are set to no climb, so TOWER points stay at 0 and cannot reach ${th.traversal}. That is normal for this season's top teams: leaving the whole 30-second END GAME in the FUEL cycle is usually worth more. To price a climb, set one robot's max climb to L1 or higher and run again.` });
   } else if (r.rpProb.traversal < 0.95) {
     const auto = 2 * POINTS.tower.l1Auto; // §6.5.2: LEVEL 1 in AUTO, two ROBOTs max
     const tip =
@@ -1313,10 +1322,10 @@ function renderInsights(r) {
         ? `The cheapest line is two L1 in AUTO (${auto} points) plus one L3 in END GAME (${POINTS.tower.l3Teleop}).`
         : aiMaxClimb === 2
           ? `The cheapest line is two L1 in AUTO (${auto} points) plus one L2 in END GAME (${POINTS.tower.l2Teleop}), exactly ${auto + POINTS.tower.l2Teleop}.`
-          : `With only L1 available it takes two L1 in AUTO (${auto} points) plus two L1 in END GAME (${2 * POINTS.tower.l1Teleop}) to reach ${th.traversal.regional}, which means giving up two robots to the climb and handing away the 30-second FUEL cycle.`;
-    list.push({ tone: 'warn', text: `<b>TRAVERSAL RP (TOWER ≥ ${th.traversal.regional}) is at risk.</b> §6.5.2 counts L1 once in AUTO and once in TELEOP. ${tip}` });
+          : `With only L1 available it takes two L1 in AUTO (${auto} points) plus two L1 in END GAME (${2 * POINTS.tower.l1Teleop}) to reach ${th.traversal}, which means giving up two robots to the climb and handing away the 30-second FUEL cycle.`;
+    list.push({ tone: 'warn', text: `<b>TRAVERSAL RP (TOWER ≥ ${th.traversal}) is at risk.</b> §6.5.2 counts L1 once in AUTO and once in TELEOP. ${tip}` });
   } else {
-    list.push({ tone: 'good', text: `<b>TRAVERSAL RP is safe.</b> The plan averages ${fmt(r.avgTower, 0)} TOWER points ≥ ${th.traversal.regional}.` });
+    list.push({ tone: 'good', text: `<b>TRAVERSAL RP is safe.</b> The plan averages ${fmt(r.avgTower, 0)} TOWER points ≥ ${th.traversal}.` });
   }
 
   const fouls = (r.events || []).filter((e) => e.kind === 'foul');
@@ -1845,7 +1854,7 @@ function renderRules() {
     ['TOWER LEVEL 1 (AUTO)', `${POINTS.tower.l1Auto} pts, 2 per alliance max`, 'Table 6-4 / §6.5.2'],
     ['TOWER LEVEL 1 (TELEOP)', `${POINTS.tower.l1Teleop} pts`, 'Table 6-4 (conflicts with §6.5.2)'],
     ['TOWER LEVEL 2 / 3', `${POINTS.tower.l2Teleop} / ${POINTS.tower.l3Teleop} pts`, 'Table 6-4'],
-    ['ENERGIZED / SUPERCHARGED / TRAVERSAL', `${POINTS.rpThreshold.energized.regional} / ${POINTS.rpThreshold.supercharged.regional} / ${POINTS.rpThreshold.traversal.regional}`, 'Table 6-5'],
+    ['ENERGIZED / SUPERCHARGED / TRAVERSAL', `${rpBars('regional').energized} / ${rpBars('regional').supercharged} / ${rpBars('regional').traversal} regional, ${rpBars('districtChamp').energized} / ${rpBars('districtChamp').supercharged} / ${rpBars('districtChamp').traversal} district CHAMPIONSHIP`, 'Table 6-5'],
     ['Win / tie RP', `3 / 1`, 'Table 6-4'],
     ['MINOR / MAJOR FOUL', `${POINTS.foul.minor} / ${POINTS.foul.major} pts to the opponent`, 'Table 6-6'],
     ['FUEL staged', `${FUEL.stagedTotal} (DEPOT 24×2, CHUTE 24×2, preload ≤8 per robot, rest in the NEUTRAL ZONE)`, '§6.3.4'],

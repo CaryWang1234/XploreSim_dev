@@ -60,6 +60,22 @@ export const POINTS = {
   },
 };
 
+// Table 6-5 prints one column per event tier, so "the bar" is only defined together with the tier a
+// MATCH is played at. Every reader of a bar goes through here — the engine grades against it, the
+// search objectives weight against it, the page's captions print it — because the alternative is what
+// this build had: a DCMP batch counted against 240 while the table beside it read "≥ 100".
+// Anything but 'districtChamp' reads the regional column, matching the scenario default.
+export function rpBars(event) {
+  const key = event === 'districtChamp' ? 'districtChamp' : 'regional';
+  const t = POINTS.rpThreshold;
+  return {
+    event: key,
+    energized: t.energized[key],
+    supercharged: t.supercharged[key],
+    traversal: t.traversal[key],
+  };
+}
+
 // §6.5.2 ROBOT Scoring Criteria.
 // MANUAL CONFLICT, kept visible on purpose: §6.5.2 states "A ROBOT may only earn TOWER
 // points for LEVEL 1 during AUTO", while Table 6-4 prints a TELEOP value of 10 for LEVEL 1.

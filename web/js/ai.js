@@ -13,7 +13,7 @@
 // Every number a policy uses about the OPPONENT comes from a noisy scouting report plus in-MATCH
 // observation, never from the opponent's true parameters.
 
-import { TIME, POINTS, FUEL, FIELD, hubActiveTable } from './rules.js';
+import { TIME, POINTS, FUEL, FIELD, hubActiveTable, rpBars } from './rules.js';
 import { GEO, INTENT } from './engine.js';
 import {
   ROLE,
@@ -518,7 +518,10 @@ function hasTraversal(plan, towerL1TeleopAllowed) {
     const l = plan.climb.levels[i] || 3;
     tower += l === 1 ? (towerL1TeleopAllowed ? POINTS.tower.l1Teleop : 0) : l === 2 ? POINTS.tower.l2Teleop : POINTS.tower.l3Teleop;
   }
-  return tower >= POINTS.rpThreshold.traversal.regional;
+  // Table 6-5 prints the same TRAVERSAL bar in both event columns, so this one plan-level test does
+  // not need to know which tier the MATCH is played at — unlike the two FUEL bars, where the tier
+  // moves ENERGIZED from 100 to 240.
+  return tower >= rpBars().traversal;
 }
 
 function nextPlayable(sched, fromIdx) {

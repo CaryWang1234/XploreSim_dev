@@ -2,7 +2,7 @@
 // worker to train the micro-policy weights by self-play, with Elo against named baselines so the
 // claim "the AI is strong" is backed by a number rather than an assertion.
 
-import { TIME, POINTS, FIELD } from './rules.js';
+import { TIME, POINTS, FIELD, rpBars } from './rules.js';
 import { GEO, INTENT, simulateMatch } from './engine.js';
 import { defaultScenario, makeAlliance, SAMPLES, periodAt } from './model.js';
 import { hubActiveTable } from './rules.js';
@@ -304,8 +304,10 @@ export function headToHead({ kindA, kindB, A = DEFAULT_WEIGHTS, B = DEFAULT_WEIG
 // derivative-free and reliable for ~20 dimensions, and it runs happily in a Web Worker.
 //
 // The fitness is deliberately smooth rather than the literal Ranking Point total: RP is a step
-// function (Table 6-5 thresholds), so a population sitting just under SUPERCHARGED would see a
-// flat gradient. Rewarding fractional progress toward each threshold keeps the search climbing.
+// function (Table 6-5 thresholds), so rewarding fractional progress toward a threshold keeps the
+// search climbing instead of sitting on a plateau under it. It only climbs toward a threshold it can
+// still cross — see RP_TERMS below for the rungs that are not, and scripts/rp.mjs for the measurement
+// that says so.
 //
 // SELECTION IS PAIRED. The incumbent is re-scored inside every generation, on that generation's
 // seeds and against that generation's opponent, and competes with the mutants. The version before
@@ -314,20 +316,41 @@ export function headToHead({ kindA, kindB, A = DEFAULT_WEIGHTS, B = DEFAULT_WEIG
 // could accept a worse vector and did: with 8 MATCHes per evaluation the seed-to-seed spread of the
 // same weights is larger than the improvement it was looking for.
 // ---------------------------------------------------------------------------------------------
-export function smoothUtility(res, aiSide) {
+// Which of the three BONUS rungs the objective weights, and why not all three.
+//
+// `node scripts/rp.mjs` measures the share of MATCHes each rung is reached in on the shipped
+// calibration, on both arms: ENERGIZED 100.0%, SUPERCHARGED 100.0%, TRAVERSAL 3.3% for the searching
+// seat, and 0.0% traversal for the greedy one, where TOWER is a constant 20 against a bar of 50 (all
+// 60 climbs in `verify.mjs`'s sample are L1 in END GAME). The FUEL distribution behind that is p10 529
+// / median 593 / p90 629 against bars of 100 and 360 — and the DCMP ENERGIZED column, 240, is cleared
+// by the same population. So `min(1, fuel/bar)` is 1.0 in every MATCH the search can reach from these
+// weights: 1.7 of the objective's 5.5 maximum was a constant with a clause cited next to it, not a
+// pressure on anything. The comment above claimed the smooth form "keeps the search climbing" toward
+// those rungs while they had nowhere left to climb.
+//
+// Muting them is a no-op for the vectors already on the page: `win` and `margin` were doing the
+// selecting, and a candidate that tanked throughput to reach a FUEL bar it then lost anyway was
+// already losing MATCHes. They stay in the file because a rung stops being free the moment throughput
+// drops — a real roster imported from measured numbers is exactly the case that brings them back.
+// `rp.mjs` fails in both directions: a live term saturated at 1.0 is dead weight, and a muted term
+// reached in fewer than 95% of MATCHes is a signal the objective threw away. Flip a flag here without
+// re-running it and the guard says so.
+export const RP_TERMS = {
+  energized: { weight: 0.5, live: false },
+  supercharged: { weight: 1.2, live: false },
+  traversal: { weight: 0.8, live: true },
+};
+
+export function smoothUtility(res, aiSide, bars = rpBars()) {
   const me = res.final[aiSide];
   const them = res.final[aiSide === 'red' ? 'blue' : 'red'];
   const win = me.total > them.total ? 1 : me.total === them.total ? 0.5 : 0;
   const margin = Math.max(-150, Math.min(150, me.total - them.total));
-  const fuel = me.fuel;
-  const tower = me.towerTotal;
-  return (
-    3.0 * win +
-    1.2 * Math.min(1, fuel / 360) + // SUPERCHARGED RP threshold (Table 6-5)
-    0.5 * Math.min(1, fuel / 100) + // ENERGIZED RP threshold
-    0.8 * Math.min(1, tower / 50) + // TRAVERSAL RP threshold
-    0.004 * margin
-  );
+  let u = 3.0 * win + 0.004 * margin;
+  if (RP_TERMS.energized.live) u += RP_TERMS.energized.weight * Math.min(1, me.fuel / bars.energized);
+  if (RP_TERMS.supercharged.live) u += RP_TERMS.supercharged.weight * Math.min(1, me.fuel / bars.supercharged);
+  if (RP_TERMS.traversal.live) u += RP_TERMS.traversal.weight * Math.min(1, me.towerTotal / bars.traversal);
+  return u;
 }
 
 // Set `families` above 1 to spread the MATCHes over that many disjoint seed families instead of
@@ -384,7 +407,7 @@ export function fitnessTrace({ weights, opponent = null, matches = 6, seed = 424
       bluePolicy: aiSide === 'red' ? other : me,
       scenario: sc,
     });
-    out.push(smoothUtility(res, aiSide));
+    out.push(smoothUtility(res, aiSide, rpBars(sc.event)));
   }
   return out;
 }

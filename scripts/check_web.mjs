@@ -128,5 +128,34 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   }
 }
 
+// Table 6-5 prints a column per event tier, so "the bar" is only defined with the tier. This build
+// shipped the bug: engine.js graded a DCMP batch against 240 while every caption beside the rate read
+// the `.regional` field of the raw table, and `smoothUtility` hard-coded 100/360/50 so the tier the
+// reader chose did not reach the objective either. The rule now is that `rules.js` is the only file
+// allowed to name a column — everyone else goes through `rpBars(event)` — and the number the page
+// prints is the one the engine graded against, which `mc.js` carries out of the MATCH rather than
+// re-deriving. A literal column access outside rules.js is a caption that can drift again.
+{
+  for (const name of fs.readdirSync(path.join(ROOT, JS_DIR))) {
+    if (!name.endsWith('.js') || name === 'rules.js') continue;
+    const src = fs.readFileSync(path.join(ROOT, JS_DIR, name), 'utf8');
+    const col = src.match(/\.(regional|districtChamp)\b/);
+    if (col) fail(`${name} reads the Table 6-5 column ${col[0]} directly; take it from rpBars(event) so the caption cannot disagree with the grading`);
+    if (/rpThreshold\s*\./.test(src)) fail(`${name} walks rpThreshold's own shape instead of calling rpBars()`);
+  }
+  const eng = fs.readFileSync(path.join(ROOT, JS_DIR, 'engine.js'), 'utf8');
+  if (!eng.includes('rpBars(sc.event)')) fail('engine.js no longer grades against the scenario event, so a DCMP batch is graded on the regional column');
+  const mcsrc = fs.readFileSync(path.join(ROOT, JS_DIR, 'mc.js'), 'utf8');
+  if (!mcsrc.includes('a.rp.thresholds')) fail('mc.js no longer carries the graded bars out of the MATCH, so the page prints a re-derived number');
+  const lg = fs.readFileSync(path.join(ROOT, JS_DIR, 'league.js'), 'utf8');
+  if (!lg.includes('smoothUtility(res, aiSide, rpBars(sc.event))')) fail('league.js scores the objective without the event column, so the tier on the page does not reach the search');
+  if (!/export const RP_TERMS/.test(lg)) fail('league.js no longer exports RP_TERMS, which scripts/rp.mjs audits');
+  // The audit only has teeth if something runs it. A script nobody invokes is a claim, not a check.
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  if (!fs.existsSync(path.join(ROOT, 'scripts', 'rp.mjs'))) fail('scripts/rp.mjs is missing: which rung the objective weights is unmeasured');
+  if (!pkg.scripts?.rp) fail('package.json has no `rp` script');
+  if (!(pkg.scripts?.validate || '').includes('npm run rp')) fail('npm run validate does not run rp: the rung audit is not part of a release check');
+}
+
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
 process.exit(bad === 0 ? 0 : 1);
