@@ -171,6 +171,9 @@ select { font-family: inherit; }
   position: sticky; bottom: -16px; padding: 10px 0 4px;
   background: linear-gradient(180deg, rgba(19, 27, 38, 0) 0%, var(--panel) 22%);
 }
+/* Only the run row sticks; two stacked sticky rows fight for the same bottom edge. */
+.store-row { position: static; background: none; margin-top: 6px; padding: 0; }
+.store-row #setup-store { flex: 1 1 200px; min-width: 0; }
 .btn {
   background: #1d2836; color: var(--text); border: 1px solid var(--line);
   border-radius: 9px; padding: 8px 14px; cursor: pointer;

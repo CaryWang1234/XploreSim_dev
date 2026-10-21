@@ -7,6 +7,7 @@ import { SAMPLES } from '../web/js/model.js';
 import { FieldView } from '../web/js/viz.js';
 import { sampleReplay } from '../web/js/replay.js';
 import { modeBands, periodBands, robotRows, scoreSeries, sourceRows, strideOf, windowBands } from '../web/js/chartdata.js';
+import { SETUP_VERSION, buildSetup, readSetup, encode, decode, toLink } from '../web/js/statestore.js';
 
 test('export retains the last anchor and repeated exports do not degrade a replay', () => {
   const original = Array.from({ length: 12 }, (_, i) => ({ t: i / 10 }));
@@ -289,3 +290,149 @@ test('the single-MATCH charts derive from the anchors and agree with the ledger 
     assert.equal(src[i].neutral + src[i].zone + src[i].feed, src[i].taken, `${src[i].name} bar does not add up to its own length`);
   }
 });
+
+// The autosave and the shareable link are one codec, and its input is somebody's clipboard: a stale
+// localStorage entry, a hand-edited URL, a link from a build that no longer exists. Every value coming
+// back out has to be re-validated rather than trusted, because a setup is an argument to a physics
+// engine — an unchecked object is a way to crash the page from a URL, and an unchecked `__proto__` key
+// is a way to write to Object.prototype from one.
+
+const shippedSetup = () => ({
+  rosters: { red: SAMPLES.slice(0, 3).map((p) => JSON.parse(JSON.stringify(p))), blue: SAMPLES.slice(3, 6).map((p) => JSON.parse(JSON.stringify(p))) },
+  weights: { ...DEFAULT_WEIGHTS },
+  scenario: { objective: 'rs', event: 'districtChamp', autoWinner: 'even', towerL1TeleopAllowed: false, faultsEnabled: true, contactFouls: true, humanThrowPerSec: { red: 0.4, blue: 0.5 }, humanAccuracy: { red: 75, blue: 80 } },
+  seed: 20260110,
+  matches: 120,
+  iterations: 200,
+  side: 'blue',
+  opponent: 'greedy',
+});
+
+test('a setup survives bytes and comes back as the same question', () => {
+  const built = buildSetup(shippedSetup());
+  const { obj, error } = decode(encode(built));
+  assert.equal(error, null);
+  const { setup, problems } = readSetup(obj);
+  assert.deepEqual(problems, [], `the shipped setup should round-trip clean, got ${JSON.stringify(problems)}`);
+  assert.deepEqual(setup.rosters.red.map((p) => p.team), [254, 1678, 1690]);
+  assert.deepEqual(setup.rosters.blue.map((p) => p.team), [4414, 5940, 11019]);
+  assert.equal(setup.scenario.event, 'districtChamp');
+  assert.equal(setup.scenario.contactFouls, true);
+  assert.equal(setup.scenario.towerL1TeleopAllowed, false);
+  assert.equal(setup.seed, 20260110);
+  assert.equal(setup.matches, 120);
+  assert.equal(setup.side, 'blue');
+  assert.equal(setup.opponent, 'greedy');
+  // The six cards are the bulk of a link, and a link has to survive being pasted into a chat app.
+  const { link, chars, error: linkError } = toLink(built);
+  assert.equal(linkError, null);
+  assert.ok(link.startsWith('#s='));
+  assert.ok(chars < 3000, `a shipped-roster setup is ${chars} characters, over the 3000 a chat app will paste`);
+  // A preset card is stored as an index plus its differences, so an untouched card says nothing extra.
+  const packed = built.red[0];
+  assert.equal(packed.p, 0);
+  assert.deepEqual(packed.d, {});
+});
+
+test('a card name that is not ASCII survives the same bytes', () => {
+  const s = shippedSetup();
+  s.rosters.red[0].name = '探索者 Chezy 三号';
+  const { setup, problems } = readSetup(decode(encode(buildSetup(s))).obj);
+  assert.deepEqual(problems, []);
+  assert.equal(setup.rosters.red[0].name, '探索者 Chezy 三号');
+  assert.equal(setup.rosters.red[0].team, 254);
+});
+
+test('an edited card round-trips through its preset plus the fields that moved', () => {
+  const s = shippedSetup();
+  s.rosters.red[1].capacity = 44;
+  s.rosters.red[1].shootAccuracy = 0.71;
+  s.rosters.red[1].climb = { l1: true, l2: true, l3: false, timeSec: 6.5, attachTimeSec: 1.5 };
+  s.rosters.red[2].plays = false;
+  const packed = buildSetup(s).red[1];
+  assert.deepEqual(Object.keys(packed.d).sort(), ['capacity', 'climbTime', 'climbMax', 'shootAccuracy'].sort());
+  const { setup } = readSetup(decode(encode(buildSetup(s))).obj);
+  assert.equal(setup.rosters.red[1].capacity, 44);
+  assert.equal(setup.rosters.red[1].shootAccuracy, 0.71);
+  assert.equal(setup.rosters.red[1].climb.l2, true);
+  assert.equal(setup.rosters.red[1].climb.l3, false);
+  assert.equal(setup.rosters.red[1].climb.timeSec, 6.5);
+  assert.equal(setup.rosters.red[2].plays, false);
+});
+
+test('a Custom card keeps its own numbers and drops whatever else a link claims', () => {
+  // Written as JSON text on purpose: `{ __proto__: {...} }` in an object literal sets the prototype and
+  // never becomes an own key, so the literal form would test nothing. A parsed link is the real case —
+  // there "__proto__" IS an own enumerable property, and copying it key by key is a prototype write.
+  const row = JSON.parse('{"p":-1,"d":{"team":9999,"name":"Mine","capacity":50,"mechanism":"hopper","ref":"not a preset","source":"nowhere","invented":12,"__proto__":{"polluted":"yes"}}}');
+  assert.equal(Object.getOwnPropertyNames(row.d).includes('__proto__'), true, 'the fixture is not a parsed link');
+  const built = buildSetup(shippedSetup());
+  const obj = { v: SETUP_VERSION, red: [row, row, row], blue: built.blue, weights: built.weights, scenario: built.scenario };
+  const { setup, problems } = readSetup(obj);
+  assert.equal(setup.rosters.red[0].team, 9999);
+  assert.equal(setup.rosters.red[0].capacity, 50);
+  assert.equal(setup.rosters.red[0].mechanism, 'hopper');
+  assert.equal(setup.rosters.red[0].ref, undefined, 'a hand-typed card must not arrive wearing a preset provenance');
+  assert.equal(setup.rosters.red[0].source, undefined);
+  assert.equal(setup.rosters.red[0].invented, undefined, 'a field no card has got to stay out of the profile');
+  assert.ok(problems.some((p) => p.includes('invented')));
+  // The pollution attempt has to have been refused, not merely ignored downstream.
+  assert.equal({}.polluted, undefined);
+  assert.equal(Object.getPrototypeOf({}), Object.prototype);
+  assert.equal(Object.getPrototypeOf(setup.rosters.red[0]), Object.prototype);
+});
+
+test('out-of-range and wrong-typed values are clamped or refused, and said out loud', () => {
+  const row = JSON.parse('{"p":0,"d":{"driveSpeedIps":1000000000,"shootAccuracy":5,"mechanism":"warpengine","climbMax":7,"climbTime":-3,"plays":"yes","heightIn":"tall","__proto__":{"polluted":"yes"},"invented":1}}');
+  const built = buildSetup(shippedSetup());
+  const { setup, problems } = readSetup({
+    v: SETUP_VERSION,
+    red: [row, row, row],
+    blue: built.blue,
+    weights: { ...DEFAULT_WEIGHTS, defenseEfficacy: 44, traversalOverhead: 'x' },
+    scenario: { objective: 'money', event: 'districtChamp', contactFouls: 'true' },
+  });
+  assert.equal(setup.rosters.red[0].driveSpeedIps, 400, 'the domain ceiling is what a link can ask for at most');
+  assert.equal(setup.rosters.red[0].shootAccuracy, 0.99);
+  assert.equal(setup.rosters.red[0].mechanism, SAMPLES[0].mechanism, 'an unknown shooter keeps the preset');
+  assert.equal(setup.rosters.red[0].climb.l1, !!SAMPLES[0].climb.l1, 'climbMax 7 buys no climb');
+  assert.equal(setup.rosters.red[0].plays, true, 'a card cannot be benched by a string');
+  assert.ok(problems.some((p) => p.includes('driveSpeedIps')));
+  assert.ok(problems.some((p) => p.includes('mechanism')));
+  assert.ok(problems.some((p) => p.includes('climbMax')));
+  assert.ok(problems.some((p) => p.includes('heightIn')));
+  assert.ok(problems.some((p) => p.includes('invented')), 'a preset row drops an unknown field quietly');
+  assert.equal({}.polluted, undefined);
+  assert.equal(Object.getPrototypeOf(setup.rosters.red[0]), Object.prototype);
+  assert.ok(problems.some((p) => p.includes('objective')));
+  assert.ok(problems.some((p) => p.includes('contactFouls')));
+  // A weight outside its domain is refused by clampWeights, which is where the search keeps itself honest.
+  assert.equal(setup.weights.defenseEfficacy, 0.9);
+  assert.ok(problems.some((p) => p.includes('defenseEfficacy')));
+  assert.equal(setup.weights.traversalOverhead, DEFAULT_WEIGHTS.traversalOverhead);
+});
+
+test('a setup that cannot make a MATCH is refused rather than half-applied', () => {
+  const built = buildSetup(shippedSetup());
+  const bench = { p: 0, d: { plays: false } };
+  const { setup, problems } = readSetup({ v: SETUP_VERSION, red: [bench, bench, bench], blue: built.blue, weights: built.weights, scenario: built.scenario });
+  assert.ok(problems.some((p) => p.includes('red benched all three')), JSON.stringify(problems));
+  // Two cards on a side is not a MATCH either; the side falls back rather than running a 1v2.
+  const short = readSetup({ v: SETUP_VERSION, red: built.red.slice(0, 2), blue: built.blue, weights: built.weights, scenario: built.scenario });
+  assert.ok(short.problems.some((p) => p.includes('red has 2 ROBOTS')));
+  assert.equal(short.setup.rosters.red.length, 3);
+});
+
+test('bytes that are not a setup fail with a reason instead of a crash', () => {
+  for (const bad of ['', '#s=', '#s=!!!!', '#s=aGVsbG8', 'notbase64url!']) {
+    const { obj, error } = decode(bad);
+    assert.equal(obj, null, `${bad} decoded`);
+    assert.ok(error, `${bad} decoded without a reason`);
+  }
+  assert.deepEqual(readSetup(null).setup, null);
+  const stale = readSetup({ v: 'xplore-setup-v0' });
+  assert.equal(stale.setup, null, 'a setup from another version is not this page format');
+  assert.match(stale.problems.join(' '), /version/, `a refused version has to say so, got ${JSON.stringify(stale.problems)}`);
+  assert.equal(readSetup({ v: SETUP_VERSION }).setup.rosters.red.length, 3, 'a setup with no rosters at all still has to be fieldable');
+});
+

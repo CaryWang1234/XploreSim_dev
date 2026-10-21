@@ -157,5 +157,47 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   if (!(pkg.scripts?.validate || '').includes('npm run rp')) fail('npm run validate does not run rp: the rung audit is not part of a release check');
 }
 
+// The autosave and the shareable link are two halves on purpose: statestore.js turns a setup into bytes
+// and nothing else, so scripts/runtime.test.mjs can feed it a hostile link the way the browser would.
+// That only holds while the codec touches no DOM and no storage, and the four selects the roster editor
+// builds by hand have to keep agreeing with the lists the decoder accepts — a value the select cannot
+// show is a card the reader cannot see, and a value the decoder does not know is a setup that silently
+// loses a switch.
+{
+  const ui = fs.readFileSync(path.join(ROOT, JS_DIR, 'ui.js'), 'utf8');
+  const store = fs.readFileSync(path.join(ROOT, JS_DIR, 'statestore.js'), 'utf8');
+  if (/\b(document|window|localStorage)\./.test(store)) {
+    fail('statestore.js touches the DOM or storage, so runtime.test.mjs cannot attack the decoder directly');
+  }
+  for (const fn of ['buildSetup', 'readSetup', 'encode', 'decode', 'toLink', 'packProfile', 'unpackProfile']) {
+    if (!store.includes(`export function ${fn}`)) fail(`statestore.js no longer exports ${fn}`);
+  }
+  for (const fn of ['buildSetup', 'readSetup', 'encode', 'toLink', 'captureSetup', 'applySetup', 'restoreSetup', 'queueSave', 'copySetupLink']) {
+    if (!ui.includes(fn)) fail(`ui.js never uses ${fn}, so half of the autosave or the link is dead`);
+  }
+  const arrayBody = (src, name) => {
+    const start = src.indexOf(`const ${name} = [`);
+    if (start < 0) return null;
+    const end = src.indexOf('];', start);
+    return end < 0 ? null : src.slice(start, end);
+  };
+  for (const [uiName, storeName] of [['CROSS_OPTIONS', 'cross'], ['PASS_OPTIONS', 'passMode'], ['PUSH_OPTIONS', 'pushMode'], ['FEED_OPTIONS', 'feedMode']]) {
+    const fromUi = [...(arrayBody(ui, uiName) || '').matchAll(/v:\s*'([^']+)'/g)].map((m) => m[1]);
+    // CHOICE is an object of arrays, so the entry is read by name rather than as a whole literal.
+    const entry = store.match(new RegExp('\\n\\s+' + storeName + ':\\s*\\[([^\\]]*)\\]', 'm'));
+    const fromStore = entry ? [...entry[1].matchAll(/'([^']+)'/g)].map((q) => q[1]) : [];
+    if (!fromUi.length) fail(`ui.js's ${uiName} has no { v: '...' } values to compare`);
+    if (!fromStore.length) fail(`statestore.js does not list the values ${uiName} offers under ${storeName}`);
+    const missing = fromUi.filter((v) => !fromStore.includes(v));
+    const extra = fromStore.filter((v) => !fromUi.includes(v));
+    if (missing.length) fail(`statestore.js refuses ${storeName}: ${missing.join(', ')} that ${uiName} offers — a setup with it loses the switch`);
+    if (extra.length) fail(`statestore.js accepts ${storeName}: ${extra.join(', ')} that ${uiName} cannot show`);
+  }
+  for (const id of ['btn-copy-link', 'btn-forget', 'setup-store']) {
+    if (!html.includes(`id="${id}"`)) fail(`#${id} is not in index.html — that control does not exist`);
+    if (!ui.includes(`'${id}'`)) fail(`ui.js never asks for #${id}`);
+  }
+}
+
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
 process.exit(bad === 0 ? 0 : 1);

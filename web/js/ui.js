@@ -1,6 +1,7 @@
 // App wiring: roster editing, running the AI in a worker, playback, and the tactical read-out.
 
 import { TIME, POINTS, FIELD, FUEL, RULES, RULE_CONFLICTS, ROBOT_LIMITS, rpBars } from './rules.js';
+import { STORAGE_KEY, HASH_PREFIX, buildSetup, readSetup, encode, decode, toLink } from './statestore.js';
 import { SAMPLES, ARCHETYPES, MECHANISMS, STARTS, DRIVERS, CHASSIS, CHASSIS_OF, INTAKE_SIDES, derived, periodAt } from './model.js';
 import { DEFAULT_WEIGHTS } from './ai.js';
 import { FieldView } from './viz.js';
@@ -2311,8 +2312,173 @@ async function calibrate() {
 // ---------------------------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+// The setup as bytes: an autosave and a link, from one codec (statestore.js).
+//
+// Nothing was saved before, so twenty minutes of typed pit measurements died on a refresh and the only
+// way to hand a setup to a teammate was the per-MATCH replay file, which carries a MATCH rather than a
+// question. Both paths write the same object, so a link cannot restore anything the autosave would not.
+// Everything coming back out of storage or a URL goes through `readSetup`, which re-validates each
+// field and clamps it: a link is an untrusted input to a physics engine, and half-trusting it is a way
+// to crash the page from someone's clipboard.
+// ---------------------------------------------------------------------------------------------
+let saveTimer = 0;
+let lastSavedBytes = null;
+let lastAppliedLink = null;
+
+function captureSetup() {
+  return buildSetup({
+    rosters: state.rosters,
+    weights: state.weights,
+    scenario: scenarioOverride(),
+    seed: Number($('inp-seed').value) || 20260110,
+    matches: Math.max(1, Math.round(Number($('inp-mcmatches').value) || 120)),
+    iterations: payload().iterations,
+    side: plannedSide(),
+    opponent: opponentPick().kind,
+  });
+}
+
+function setupLine(text, tone) {
+  const el = $('setup-store');
+  if (!el) return;
+  el.textContent = text;
+  el.className = `hint${tone ? ` ${tone}` : ''}`;
+}
+
+function writeStorage(bytes) {
+  try {
+    localStorage.setItem(STORAGE_KEY, bytes);
+    return null;
+  } catch (e) {
+    // Private mode, a full quota, or a browser that refuses storage on a file:// page. The setup is not
+    // lost — the link still works — so say which half failed rather than pretending nothing happened.
+    return e && e.name ? e.name : String(e);
+  }
+}
+
+function queueSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const setup = captureSetup();
+    const bytes = encode(setup);
+    if (bytes === lastSavedBytes) return;
+    const err = writeStorage(bytes);
+    if (err) {
+      setupLine(`this browser will not store a setup (${err}); use Copy setup link`, 'warn');
+      return;
+    }
+    lastSavedBytes = bytes;
+    setupLine('setup saved in this browser', 'ok');
+  }, 600);
+}
+
+function applySetup(setup, problems) {
+  state.rosters = { red: setup.rosters.red, blue: setup.rosters.blue };
+  state.weights = { ...state.weights, ...setup.weights };
+  const setVal = (id, v) => {
+    const el = $(id);
+    if (el && v !== null && v !== undefined) el.value = String(v);
+  };
+  const setCheck = (id, v) => {
+    const el = $(id);
+    if (el && typeof v === 'boolean') el.checked = v;
+  };
+  const sc = setup.scenario;
+  if (sc.objective) setVal('sel-objective', sc.objective);
+  if (sc.event) setVal('sel-event', sc.event);
+  if (sc.autoWinner) setVal('sel-autowinner', sc.autoWinner);
+  setCheck('chk-l1teleop', sc.towerL1TeleopAllowed);
+  setCheck('chk-faults', sc.faultsEnabled);
+  setCheck('chk-contactfouls', sc.contactFouls);
+  for (const side of ['red', 'blue']) {
+    const rate = $(`hp-${side}`);
+    if (rate && setup.humanThrow[side] !== null) rate.value = String(setup.humanThrow[side]);
+    const acc = $(`hpacc-${side}`);
+    if (acc && setup.humanAccuracy[side] !== null) acc.value = String(Math.round(setup.humanAccuracy[side] * 100));
+  }
+  // The throw-rate and accuracy inputs sync state on their own events; a restored value has to be read
+  // back the same way the page reads a typed one, or the next run uses the old number.
+  for (const side of ['red', 'blue']) {
+    state.humanThrow[side] = Math.max(0, Number($(`hp-${side}`)?.value) || 0);
+    state.humanAcc[side] = Math.min(1, Math.max(0, (Number($(`hpacc-${side}`)?.value) || 0) / 100));
+  }
+  setVal('inp-seed', setup.seed);
+  setVal('inp-mcmatches', setup.matches);
+  setVal('inp-iter', setup.iterations);
+  if (setup.side) setVal('sel-aiside', setup.side);
+  if (setup.opponent) {
+    const el = $('sel-opponent');
+    if (el && [...el.options].some((o) => o.value === setup.opponent)) el.value = setup.opponent;
+    else problems.push(`the link's opponent "${setup.opponent}" is not on this build; kept ${el?.value}`);
+  }
+  renderRoster('red');
+  renderRoster('blue');
+  renderTeams();
+}
+
+function restoreSetup() {
+  const problems = [];
+  let source = null;
+  let bytes = null;
+  const hash = String(location.hash || '');
+  if (hash.startsWith(HASH_PREFIX)) {
+    bytes = hash.slice(HASH_PREFIX.length);
+    source = 'this link';
+  } else {
+    try {
+      bytes = localStorage.getItem(STORAGE_KEY);
+      if (bytes) source = 'this browser';
+    } catch (e) {
+      problems.push('this browser will not give up its stored setup');
+    }
+  }
+  if (!bytes) return;
+  const { obj, error } = decode(bytes);
+  if (error) {
+    setupLine(`the setup from ${source} could not be read (${error})`, 'warn');
+    status(`Setup from ${source} unreadable: ${error}`, 'warn');
+    return;
+  }
+  const { setup, problems: found } = readSetup(obj);
+  problems.push(...found);
+  if (!setup) {
+    setupLine(`the setup from ${source} is not this page's format; nothing restored`, 'warn');
+    return;
+  }
+  applySetup(setup, problems);
+  lastSavedBytes = bytes;
+  if (source === 'this link') lastAppliedLink = hash;
+  const note = problems.length ? ` — ${problems.length} value(s) fixed up, see below` : '';
+  setupLine(`setup restored from ${source}${note}`, problems.length ? 'warn' : 'ok');
+  if (problems.length) status(`Restored from ${source} with ${problems.length} fix(es): ${problems.join(' · ')}`, 'warn');
+}
+
+async function copySetupLink() {
+  const setup = captureSetup();
+  const { link, chars, error } = toLink(setup);
+  if (error) {
+    setupLine(error, 'warn');
+    status(error, 'warn');
+    return;
+  }
+  history.replaceState(null, '', link);
+  lastAppliedLink = link;
+  const url = location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    setupLine(`link copied · ${chars} characters · opens this exact setup`, 'ok');
+  } catch (e) {
+    // No clipboard permission (insecure context, a denied prompt). The address bar still holds the link.
+    setupLine(`link is in the address bar · ${chars} characters — copy it from there`, 'warn');
+  }
+}
+
 function boot() {
   state.speed = Number($('sel-speed').value);
+  // Before the first render: a restored card has to be the card the calibration and the first run see,
+  // not a repaint after the page has already answered a question with the shipped rosters.
+  restoreSetup();
   renderRoster('red');
   renderRoster('blue');
   renderTeams();
@@ -2340,6 +2506,39 @@ function boot() {
       sync();
     }
   }
+  // Autosave. One delegated listener on the setup panel rather than a line in each of the thirty-odd
+  // handlers, because the panel is exactly the set of things the codec stores, and a handler that
+  // forgets to save is the failure this feature would have had anyway. The two Tactics controls that
+  // decide a run — which seat and which opponent — live outside it, so they are named.
+  const setupPanel = document.querySelector('.panel.setup');
+  if (setupPanel) {
+    for (const type of ['input', 'change']) setupPanel.addEventListener(type, queueSave);
+  }
+  for (const id of ['sel-aiside', 'sel-opponent', 'inp-replay-match']) {
+    const el = $(id);
+    if (el) el.addEventListener('change', queueSave);
+  }
+  $('btn-copy-link')?.addEventListener('click', () => void copySetupLink());
+  $('btn-forget')?.addEventListener('click', () => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      lastSavedBytes = null;
+      setupLine('saved setup forgotten; this browser starts from the shipped rosters next time', 'ok');
+    } catch (e) {
+      setupLine('this browser will not let go of its stored setup', 'warn');
+    }
+    if (location.hash.startsWith(HASH_PREFIX)) history.replaceState(null, '', location.pathname + location.search);
+  });
+  window.addEventListener('hashchange', () => {
+    // Pasting a new link into the address bar is the user asking for that setup, so apply it. The guard
+    // is against our own write: Copy sets the hash, and re-applying what is already on screen would
+    // repaint the rosters over anything typed since.
+    const h = String(location.hash || '');
+    if (!h.startsWith(HASH_PREFIX) || h === lastAppliedLink) return;
+    restoreSetup();
+    renderTeams();
+    if (state.timeline) drawAt(state.playT);
+  });
   $('hub-strip').className = 'hub-strip none';
   $('hub-strip').innerHTML = '<i class="ar">◀</i><span>Waiting for a match</span><i class="ar">▶</i>';
   renderRules();

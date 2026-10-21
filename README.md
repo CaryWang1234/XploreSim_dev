@@ -53,6 +53,7 @@ web/js/mc.js        one MATCH orchestrator, shared by the UI worker and the scri
 web/js/league.js    baselines, A/B harnesses, the weight evolution loop
 web/js/viz.js       canvas field rendering
 web/js/ui.js        panels, charts, replay transport, match export/import
+web/js/statestore.js  the setup as bytes: autosave and link, validated on the way back in
 web/js/worker-client.js  worker request lifecycle and recovery after a worker failure
 web/js/replay.js    time-based replay sampling that preserves resolution across repeated exports
 scripts/            the measurements above, plus serve.mjs and check_web.mjs
@@ -128,6 +129,33 @@ and the objective divides by it too, so a district-CHAMPIONSHIP batch cannot be 
 regional number it did not use — which is how this build shipped. `scripts/check_web.mjs` fails any
 module outside `rules.js` that names a column, and `scripts/rp.test.mjs` checks the graded bar, the
 exported bar and the printed bar against a real MATCH.
+
+## The setup is bytes: an autosave and a link
+
+Nothing was saved before, so twenty minutes of typed pit measurements died on a refresh, and the only way
+to hand a setup to a teammate was the per-MATCH replay file — which carries a MATCH, not a question.
+`web/js/statestore.js` now turns the six cards, the 23 weights, the scenario switches and the run inputs
+into one string; `ui.js` writes it to `localStorage` on any change in the setup panel (debounced 600 ms,
+and a no-op when the bytes are already what is stored) and writes the same bytes into a `#s=` fragment for
+**Copy setup link**. A card is stored as its preset index plus the fields that moved, which is why the
+shipped six-ROBOT setup is 1323 characters and pastes into a chat app.
+
+The link and the storage entry are the same object through the same codec, so a link cannot restore
+anything the autosave would not. Everything read back is re-validated rather than trusted, because a
+setup is an argument to a physics engine: unknown card fields are dropped and named, out-of-range numbers
+are clamped to the editor's own domain, an enum the selects cannot show is refused, weights go through
+`clampWeights`, a side with two or zero fielded ROBOTS falls back with a sentence, and a version tag that
+is not this build's is refused outright. `__proto__` is copied key by key only after the whitelist, so a
+URL cannot write to `Object.prototype`. `scripts/runtime.test.mjs` attacks the decoder with each of those
+cases; `scripts/check_web.mjs` holds the two halves in step (the codec touches no DOM, which is what makes
+it testable, and the four hand-written option lists in `ui.js` match the lists the decoder accepts).
+
+The parts only a browser can prove were walked through in headless Chromium against `npm run serve`: an
+edit reaches storage, Copy writes exactly the bytes storage holds, a reload from the link restores the
+card and the seat and the run after it uses the restored card rather than the shipped one, a link pasted
+into an open tab applies without a reload, garbage/an-old-version/a `__proto__` payload each come back
+with a reason and a working page, and **Forget saved setup** drops both halves. Harness:
+`.tmp/browser-setup.mjs` (needs a local Chromium, so it is not part of `npm run validate`).
 
 ## Two engines, on purpose
 
