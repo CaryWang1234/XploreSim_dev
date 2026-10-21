@@ -1,0 +1,17 @@
+#!/bin/sh
+# Run the whole guard suite before anything leaves this machine.
+#
+# There is no CI here on purpose: the credentials this working copy pushes with do not carry the
+# `workflow` scope, so a .github/workflows file cannot be committed and pushed from it, and an Actions
+# YAML that nobody can push is decoration. This hook is the part that does not need a server: one
+# `npm run validate` (encoding and tag balance, the headless tests, the engine invariants, the rung
+# audit, and the four pinned MATCH replays) in front of every push.
+#
+# Enable it once per clone — this changes your local git config, so it is left to you to run:
+#     git config core.hooksPath .githooks
+# Skip it in an emergency with `git push --no-verify`, and say so in the commit.
+
+set -e
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-push: npm run validate"
+npm run validate

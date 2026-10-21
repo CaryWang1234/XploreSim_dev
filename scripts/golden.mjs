@@ -89,6 +89,17 @@ const CONFIGS = [
       };
     },
   },
+  {
+    // The same MATCH as `pinned-score-contact` under the stricter of the two readings the Manual gives
+    // for TOWER LEVEL 1: §6.5.2 counts it only in AUTO, Table 6-4 prints a TELEOP value of 10. That
+    // conflict is kept as a switch rather than silently resolved (see RULE_CONFLICTS), so a build that
+    // stopped honouring the switch has to move a digest — this is the case that says so. Same seed, same
+    // pinned plans, same contact settings; the only difference is which reading the score is graded with.
+    name: 'pinned-score-towerl1-strict',
+    note: '§6.5.2 strict: no TOWER points for LEVEL 1 in TELEOP, on the pinned all-SCORE MATCH above',
+    scenario: { seed: 90001, contactFouls: true, towerL1TeleopAllowed: false },
+    build: (sc) => CONFIGS[1].build(sc),
+  },
 ];
 
 function fnv(h, s) {

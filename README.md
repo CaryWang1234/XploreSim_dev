@@ -15,10 +15,17 @@ itself, the conflict is surfaced as a toggle rather than silently resolved — s
 npm run serve      # http://127.0.0.1:4180
 npm run check      # encoding, index.html tag balance, every module parses
 npm run verify     # engine invariants (no FUEL invented, no shot from outside the ALLIANCE ZONE, …)
-npm run golden     # replay three pinned MATCHes and compare digests with scripts/golden.json
-npm test           # worker recovery, replay export, input guards, and renderer cache regression tests
+npm run golden     # replay four pinned MATCHes and compare digests with scripts/golden.json
+npm test           # worker recovery, replay export, input guards, renderer cache, the setup codec,
+                   # the scouting parser, the Table 6-5 columns and the declared AUTO
 npm run validate   # check + test + verify + rp + golden
 ```
+
+There is no CI in this repository, and not by oversight: the credentials this working copy pushes with
+have no `workflow` scope, so a `.github/workflows` file cannot be committed and pushed from here, and a
+pipeline nobody can push is decoration. `.githooks/pre-push` is the local half — one `npm run validate`
+in front of every push. Turn it on once per clone with `git config core.hooksPath .githooks` (your call
+to run, since it changes your git configuration), and `--no-verify` stays the escape hatch.
 
 Every number the site states is reproducible from a committed script:
 
@@ -97,7 +104,7 @@ final verdict is graded with, taken from the anchor's own `s` block), and the Nu
 ALLIANCE ZONE / FEED outlet), how much of what its own HUB handed back it kept, and how its seconds and its
 inches were spent across the nine intents. The engine counters behind them (`collectFrom`, `fuelReclaimed`,
 `modeSec`, `modeIn`, `hubReturned`) are bookkeeping only — no frame field, no event and no random draw is
-added, so `scripts/golden.mjs` still replays the same three digests. `verify.mjs`'s flow check holds that the
+added, so `scripts/golden.mjs` still replays the same digests. `verify.mjs`'s flow check holds that the
 three source columns sum to `fuelCollected`, that the mode clocks sum to `activeSec` and the mode inches to
 the distance already recorded, and that the reclaim column moves with the mechanism it names: with
 `hubExitRate: 0` the HUBs return nothing and the column reads zero. `scripts/runtime.test.mjs` additionally
@@ -116,7 +123,7 @@ prints, the intent bands must cover the MATCH and each one must land within thre
 `modeSec`, the source bars must sum to `fuelCollected`, and a chart that samples keeps at most 241 points.
 Because the panels are hidden with `hidden`, a canvas in a panel that is not open has no box to draw into and
 falls back to 320 px, so entering the tab redraws all four and re-places the marker on the instant the replay
-is already showing. None of this reaches the record: `golden.mjs` still replays the same three digests.
+is already showing. None of this reaches the record: `golden.mjs` still replays the same digests.
 
 The field renderer caches static geometry at the current canvas size and pixel ratio; moving robots,
 FUEL, HUB state and HUMAN PLAYER actions are still drawn per frame. Resizing or changing pixel density
@@ -181,7 +188,7 @@ off value, which reproduces the undeclared MATCH to the point. `scripts/runtime.
 the declaration fires, `loose-at-t=0` falls by exactly the 96 pieces beyond the three legal preloads (the
 FUEL came off the carpet, it was not invented), the AUTO winner flips and with it which HUB is dark in
 SHIFT 1 under Table 6-3, and the off switch is exact. No shipped card declares anything, so the calibration
-anchor, the mirror and the three golden digests are the same numbers they were.
+anchor, the mirror and the golden digests are the same numbers they were.
 
 ## Scouting CSV in, cards out
 
@@ -256,6 +263,13 @@ The rules this repo has learned the hard way, all of them from a figure that tur
   directions — live-and-constant is dead weight, muted-and-moving is a signal thrown away. Muting them
   moved no published number: old-minus-new is exactly 1.7000000000 across the 96 greedy MATCHes and no
   searching-seat MATCH came near the bar, so every fitness *difference* quoted here is the same difference.
+- **A rule conflict needs a digest, not a toggle.** §6.5.2 says TOWER LEVEL 1 scores only in AUTO and
+  Table 6-4 prints 10 points for it in TELEOP, and the build keeps both readings behind
+  `towerL1TeleopAllowed`. A switch with no pinned MATCH on either side of it is a claim that somebody
+  will eventually honour it, so `golden.json` now carries a fourth case: the pinned all-SCORE MATCH under
+  the strict reading, which records **596 / 571** against the same MATCH's **616 / 591** — the two TELEOP
+  LEVEL 1 climbs, exactly 20 points an ALLIANCE. A build that stopped honouring the switch moves a digest
+  instead of quietly resolving the conflict in whichever direction was convenient.
 - **Measure the null before trusting a difference.** `fitnessTrace` returns the per-MATCH utilities so a
   candidate and the incumbent can be differenced MATCH by MATCH on identical layouts, and the run prints
   the paired difference of a vector against itself first (it must be 0.000±0.000). What that pairing

@@ -39,8 +39,8 @@ REEFSCAPE 的具体改动见其仓库内的 `OPTIMIZATION.md`。
 
 ## 验证方式
 
-`npm run validate` 依次运行静态检查、运行时回归测试、引擎不变量和 3 场固定回放比较。
-`npm test` 可单独快速验证 Worker 恢复/取消、采样精度、输入边界和场地缓存。
+`npm run validate` 依次运行静态检查、运行时回归测试、引擎不变量、加分项档位审计（`npm run rp`）和 4 场固定回放比较。
+`npm test` 可单独快速验证 Worker 恢复/取消、采样精度、输入边界、场地缓存、设置编解码与 scouting CSV 解析。
 
 浏览器检查覆盖启动校准、计算中修改配置、快速播放/暂停、导出/导入、键盘导航，
 以及取消后保留结果并重新计算。渲染耗时受浏览器、画布大小和设备影响；
@@ -51,3 +51,29 @@ REEFSCAPE 的具体改动见其仓库内的 `OPTIMIZATION.md`。
 `ui.js` 仍集中承担较多展示逻辑，后续可按阵容编辑、结果面板、回放控制继续拆分。
 这次没有调整物理模型、规则常量或策略权重；AI 胜率与模型校准仍应通过现有镜像、
 消融和留出种子测试独立评估，不应由界面性能测试推断。
+
+## 2026-10-21 本轮改动
+
+| 方向 | 发现的问题 | 修改 |
+| --- | --- | --- |
+| 正确性 | `smoothUtility` 给全部三条 Table 6-5 加分项加权，但 `npm run rp` 实测两条 FUEL 项在两条臂上都是 100% 达成（FUEL p10 529 对 100/240/360 的门槛），即每一项恒等于 1.0，5.5 的最大权重里有 1.7 是常数，选不出任何东西 | 用 `RP_TERMS` 显式声明哪些项活着；两条 FUEL 项静音，TRAVERSAL 保留（门槛 0% 达成但项值仍区分爬与不爬）。守卫两个方向都查：活着且饱和＝死权重，静音但会动＝扔掉信号 |
+| 正确性 | 引擎按 `sc.event` 用 240 判 ENERGIZED，页面表格与文案却硬写 `.regional` 的 100；`smoothUtility` 干脆用字面量，选择的事件档位到不了搜索 | `rules.js` 的 `rpBars(event)` 成为唯一入口；判分档位随 verdict 一起带出，批次把它交给页面；`check_web.mjs` 拒绝 rules.js 之外任何文件点名档位 |
+| 正确性 | 页面上两条 RP 建议分支在当前标定下永不可达，等于装饰 | 按实测达成率分自动/有风险/够不着三种说法，并直接说明这条项对本 builds 的搜索没有权重 |
+| 功能 | AUTO 是已知最大的标定缺口（≈97 对真实 111–177），而真实 auto 是预编程动作，队伍本来就有测量值 | 卡片新增 **AUTO FUEL scored**：声明后该机器开局即持有这份负载，AUTO 内不再按建模命中率重掷、吸料口关闭；超出合法 8 颗预载的部分单列为 `AUTO declared → banked` 列而不混进 `fuelCollected`；`sc.autoRoutine=false` 是关断值，逐场复刻未声明的比分。`capOf` 把声明带进 `fastsim`，搜索不再按看不见的循环规划 AUTO |
+| 功能 | 全站没有任何持久化：刷新即丢编辑过的阵容与权重，只能靠逐场导出文件分享 | `web/js/statestore.js`（不碰 DOM 与 storage）把六张卡＋23 权重＋场景开关编成一份字节：设置面板任一改动去抖 600 ms 自动存，**Copy setup link** 写同样的字节到 `#s=`。回读一律重新校验：未知字段丢弃并报数、越界数夹到编辑器定义域、枚举不认识就保留原值、权重走 `clampWeights`、非法版本直接拒。Custom 卡逐键拷贝而非 `Object.assign`，否则链接里的 `__proto__` 就是一次原型写入 |
+| 功能 | 阵容只能手打，队伍已有的测量数据进不来 | **Import scouting CSV**：表头大小写与分隔符不敏感，米/厘米/百分比列按名识别并换算成手册单位；六行填两边、少于六行填正在规划的那条 alliance、多余的行数报出来。明确拒绝把 OPR/EPA 映射成卡片字段（那是每场总分，拆不成驱动速度与循环率），机制不认识、数值越界、非数字单元格都逐条说明 |
+| 功能 | RED CARD 只出现在犯规文案里，犯规方不会被罚下，§6.6.1 的第二张黄牌累加没有代价 | `sc.cardLadder`（默认关）把第二张黄转红并罚下肇事机器；`npm run cards` 先证明它会触发再定价：96 场同种子配对，37 场出牌、19 场罚下、22 黄 21 红，每 alliance 总分 **−10.4 ± 2.6**（4.0 个标准误） |
+| 可验证性 | 固定回放只覆盖 3 场，且规则冲突只有开关没有证据 | `golden.json` 增加第四场：同一份 all-SCORE 场地在 §6.5.2 严格读法下记分，实测 596/571 对 616/591，差额正是两次 TELEOP LEVEL 1（每 alliance 20 分）；前三场的 digest 一字未改 |
+| 可验证性 | `npm run validate` 只在本地手动跑，且 GitHub 凭据缺 `workflow` scope，Actions 文件推不上去 | `.githooks/pre-push` 跑全量 validate，启用命令写进 README（改 git config 由使用者自己执行），不假装有一条推不上去的流水线 |
+
+### 本轮验证方式
+
+`npm run validate` 现在是 check + test(31) + verify + rp + golden(4 场)，全绿；三条已发布数字（greedy 镜像 591.7、AI 对 greedy 67.2%、三场 golden）未变——静音两条 FUEL 项对目标只是常数偏移（old−new 在 96 场里恒为 1.7000000000）。
+浏览器走查用本机 headless Chromium 完成：自动保存与链接的往返、链接在已开标签页里生效、三类恶意字节各自被拒且页面仍能跑、AUTO 声明进引擎并在刷新后存活、CSV 导入的卡片就是下一场用的卡片。走查脚本留在 `.tmp/`（`browser-setup.mjs`、`browser-auto.mjs`、`browser-scouting.mjs`），因为它们需要本地浏览器，不进 `validate`。
+守卫的“牙”用变异取证验过：把 `RP_TERMS.energized.live` 翻成 true 后 `npm run rp` 如期失败，把 `r.thresholds.supercharged.regional` 塞回 ui.js 后 `npm run check` 如期失败，两者均已还原。
+
+### 仍未做的边界
+
+赛事层（12 场资格赛的 RP 累计与排名、淘汰赛席位）没有做：单场分差仍是页面的判断单位，而真正要回答的是“进不进得去 playoffs”。它会直接继承本轮已知还偏差的两处（AUTO 吞吐与 TELEOP 5.36/s 对真实 4.7/s），做之前应先决定这些偏差在累计口径下如何披露。
+`ui.js`（现 2.7k 行）与 `engine.js`（2.8k 行）的按面板/按子系统拆分仍是上界；本轮只把可独立测试的新模块（`chartdata.js`、`statestore.js`、`scouting.js`）拆了出去。
+黄红牌在真实赛事里的跨场累积与 §6.6.3 的“红牌整条 alliance 适用”仍未建模，因为那需要赛事层先存在。
