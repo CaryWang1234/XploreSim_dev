@@ -639,6 +639,12 @@ export function defaultScenario() {
     // silent part of the engine. The thresholds it does not invent (impact severity, where the contact
     // happened, whether it was deliberate) are measured; see web/js/engine.js.
     contactFouls: false,
+    // §6.6.1: "YELLOW CARDS are additive, meaning that a second YELLOW CARD is automatically converted to
+    // a RED CARD", and a RED CARD "results in a team being DISQUALIFIED for the MATCH". The engine has
+    // always named the card in the foul text; this decides whether it costs the machine. Off by default
+    // because the calibration figures were measured without it, and because it only has anything to do
+    // when `contactFouls` is on at all. Turn it on and the ladder is priced, not described.
+    cardLadder: false,
     seed: 20260110, // 2026 Kickoff date (§1.3)
     chunkSec: 0.1, // simulation tick
   };

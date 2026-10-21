@@ -796,6 +796,7 @@ function scenarioOverride() {
     towerL1TeleopAllowed: $('chk-l1teleop').checked,
     faultsEnabled: $('chk-faults').checked,
     contactFouls: $('chk-contactfouls').checked,
+    cardLadder: $('chk-cardladder').checked,
     humanThrowPerSec: { red: state.humanThrow.red, blue: state.humanThrow.blue },
     humanAccuracy: { red: state.humanAcc.red, blue: state.humanAcc.blue },
   };
@@ -1998,6 +1999,7 @@ function batchSnapshot() {
     towerL1TeleopAllowed: String(sc.towerL1TeleopAllowed),
     faultsEnabled: String(sc.faultsEnabled),
     contactFouls: String(sc.contactFouls),
+    cardLadder: String(sc.cardLadder),
     humanThrow: JSON.stringify(sc.humanThrowPerSec),
     humanAcc: JSON.stringify(sc.humanAccuracy),
     red: JSON.stringify(state.rosters.red),

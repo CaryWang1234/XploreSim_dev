@@ -26,6 +26,7 @@
     "team": "node scripts/team.mjs",
     "cap": "node scripts/cap.mjs",
     "defcal": "node scripts/defcal.mjs",
+    "cards": "node scripts/cards.mjs",
     "autowin": "node scripts/autowin.mjs"
   }
 }

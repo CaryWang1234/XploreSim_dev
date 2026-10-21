@@ -34,6 +34,7 @@ Every number the site states is reproducible from a committed script:
 | `npm run team` | the bunching proxies behind `mateSeparation` |
 | `npm run cap` | the four capability probes: doomed tail trips, post-fault behaviour, nose/aim error, FUEL caught off its own lane at a window reopen |
 | `npm run defcal` | what one defender in a shooting lane actually costs the opponent, with both sides' plans pinned so no search is involved |
+| `npm run cards` | whether the card ladder fires and what a disqualification costs: paired on identical seeds, with `OPPONENT=ai` for the win-rate read |
 | `npm run rp` | which Table 6-5 rungs can still move: the reach rate and the term spread on both arms, against what the objective claims to weight. Part of `npm run validate` |
 | `npm run bench` / `npm run train` | baseline ladder / weight evolution with a holdout gate |
 | `npm run night` | the multi-core version of `train`: 150 MATCHes per evaluation, paired differences, a wiring probe, named hypotheses, a pattern-search arm and a blind-mutation arm, then a gate on layouts it never searched. `HOURS=`, `MATCHES=`, `CORES=`, `LAMBDA=`, `OUT_DIR=`; writes to `.tmp/night/` and changes nothing in `web/` |
@@ -246,8 +247,16 @@ Stated on the page too, because a planner is used to make decisions:
   model — see "A declared AUTO". It is not a fix for the anchor: the shipped cards declare nothing, so
   this gap is still what the calibration is measured against.
 - TELEOP throughput is high: 5.36 FUEL/s per alliance against ≈4.7 in the real finals.
-- The YELLOW/RED CARD ladder is not priced. A second YELLOW in a phase is a DISQUALIFICATION and its
-  tournament cost is outside the model (`sc.contactFouls`).
+- The YELLOW/RED CARD ladder is enforceable now, and it is not switched on. §6.6.1 says yellows are
+  additive and a RED disqualifies the team for the MATCH, so `sc.cardLadder` (Setup → "Enforce the card
+  ladder") takes the machine that earned the second one out of the rest of the MATCH. `npm run cards`
+  measures it on the greedy mirror with contact fouls on, 96 MATCHes paired on identical seeds: 37 MATCHes
+  carded, 19 of them losing a ROBOT, 22 YELLOW and 21 RED, and a paired difference of
+  **−10.4 ± 2.6 points per ALLIANCE** (4.0 standard errors) — the enforcement is not paperwork. It stays
+  off because a DQ in a fifth of MATCHes is not what the real Einstein Finals look like (the setup note
+  puts them at 0–2 fouls a MATCH), and the frequency behind it — how often a hard hit actually breaks
+  something — is the impairment roll, which has no anchor. The tournament cost of a DQ (a carried yellow
+  into the next MATCH, an alliance-wide card in the playoffs per §6.6.3) is still outside the model.
 - TRAVERSAL RP is rarely reached, so the TOWER ladder is softer than a real elite alliance's.
 - The HUMAN PLAYER is a throw rate and an accuracy, not a person.
 - Both FUEL rungs are free at this throughput: every MATCH of both arms clears ENERGIZED (100) and

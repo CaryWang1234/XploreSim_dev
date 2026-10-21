@@ -719,6 +719,11 @@ export function simulateMatch(opts) {
           fuelPushedIn: 0,
           fouls: 0,
           foulPointsGiven: 0,
+          // §6.6.1 cards, counted per machine. The foul text has always named the card; these are what
+          // makes the second one cost something when `sc.cardLadder` is on.
+          yellowCards: 0,
+          redCards: 0,
+          dq: 0,
           pins: 0,
           // Seconds this ROBOT spent functionally impaired by an opponent's contact (G415/G416/G417).
           impairedSec: 0,
@@ -821,6 +826,9 @@ export function simulateMatch(opts) {
     red: { fuel: 0, fuelInactive: 0, towerAuto: 0, towerTeleop: 0, foulPoints: 0 },
     blue: { fuel: 0, fuelInactive: 0, towerAuto: 0, towerTeleop: 0, foulPoints: 0 },
   };
+  // Cards only accumulate when `sc.cardLadder` is on; the counters exist either way so a run that never
+  // issues one reads as zero rather than as missing.
+  const cards = { red: { yellow: 0, red: 0, dq: 0 }, blue: { yellow: 0, red: 0, dq: 0 } };
   const autoFuel = { red: 0, blue: 0 };
   const events = [];
   const timeline = [];
@@ -2371,7 +2379,38 @@ export function simulateMatch(opts) {
               const card = unable ? 'RED' : 'YELLOW';
               rammer.contactFouls += 1;
               awardFoul(rammer.alliance, POINTS.foul.major, `${code} ${CONTACT_FOUL_TEXT[code]} (MAJOR FOUL + ${card} CARD)`, t, rammer);
-              log(t, 'contact', { rammer: rammer.idx, victim: victim.idx, at: Math.round(rammer.x), severity: Math.round(severity), code, card });
+              // The card goes to the team that committed the violation, so it is the rammer that leaves,
+              // not the machine that was hit. §6.6.1 counts yellows additively inside a MATCH, so the
+              // second one is issued as a RED; a RED already issued stays a RED. A disqualified ROBOT is
+              // out for the rest of the MATCH: `disabled` is the engine's existing "takes no decisions, is
+              // not a target, is not a collider", and the model leaves the machine where it stopped rather
+              // than animating it off the carpet.
+              let dqThis = null;
+              if (sc.cardLadder) {
+                if (card === 'RED') rammer.stat.redCards += 1;
+                else rammer.stat.yellowCards += 1;
+                const secondYellow = card === 'YELLOW' && rammer.stat.yellowCards >= 2;
+                if (card === 'RED' || secondYellow) {
+                  if (secondYellow) {
+                    // "a second YELLOW CARD is automatically converted to a RED CARD", so the tally shows
+                    // the card the audience display would name, not the one the rule first reached for.
+                    rammer.stat.yellowCards -= 1;
+                    cards[rammer.alliance].yellow -= 1;
+                  }
+                  rammer.stat.redCards += 1;
+                  cards[rammer.alliance].red += 1;
+                  rammer.stat.dq += 1;
+                  rammer.disabled = true;
+                  cards[rammer.alliance].dq += 1;
+                  dqThis = { secondYellow, yellowCards: rammer.stat.yellowCards, redCards: rammer.stat.redCards };
+                } else {
+                  cards[rammer.alliance][card === 'RED' ? 'red' : 'yellow'] += 1;
+                }
+              }
+              // Recorded on the contact event rather than as a new event kind: the page already walks
+              // these for the foul strip and the scrubber marks, and a DQ is the same collision's
+              // consequence, not a different thing that happened.
+              log(t, 'contact', { rammer: rammer.idx, victim: victim.idx, at: Math.round(rammer.x), severity: Math.round(severity), code, card, dq: dqThis });
             }
           }
         }
@@ -2716,6 +2755,7 @@ export function simulateMatch(opts) {
     events,
     timeline: record ? timeline : null,
     scenario: sc,
+    cards,
     robotStats: robots.map((r) => ({
       idx: r.idx,
       alliance: r.alliance,

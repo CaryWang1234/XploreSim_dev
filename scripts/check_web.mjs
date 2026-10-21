@@ -218,6 +218,14 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   if (!ui.includes('data-k="autoRoutine"')) fail('ui.js has no AUTO FUEL input on the card');
   if (!ui.includes('s.autoRoutine')) fail('ui.js never reads autoRoutine, so the flow table prints an empty column');
   if (!store.includes("'autoRoutine'")) fail('statestore.js does not round-trip the declared AUTO: a link or reload silently un-declares it');
+  // The card ladder is the same five-file contract: a switch the page cannot reach is a rule nobody can
+  // turn on, and one the autosave forgets is a setup that silently stops enforcing it.
+  if (!eng.includes('sc.cardLadder')) fail('engine.js no longer reads sc.cardLadder');
+  if (!html.includes('id="chk-cardladder"')) fail('index.html has no card-ladder switch, so §6.6.1 cannot be enforced from the page');
+  if (!ui.includes("cardLadder: $('chk-cardladder').checked")) fail('ui.js does not read the card-ladder switch into the scenario');
+  if (!store.includes("'cardLadder'")) fail('statestore.js does not carry the card ladder through the bytes');
+  const pkg2 = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  if (!pkg2.scripts?.cards) fail('package.json has no `cards` script: whether the ladder fires is unmeasured');
 }
 
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);

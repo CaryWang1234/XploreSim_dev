@@ -66,7 +66,7 @@ const BOOLEAN = ['plays', 'canBump', 'canTrench'];
 // into `climb` and the canBump/canTrench pair rather than stored under those keys.
 const PROFILE_KEYS = new Set([...Object.keys(DEFAULT_PROFILE()), 'cross', 'climbMax', 'climbTime', 'attachTimeSec', 'autoRoutine']);
 
-const SCENARIO_KEYS = ['objective', 'event', 'autoWinner', 'towerL1TeleopAllowed', 'faultsEnabled', 'contactFouls'];
+const SCENARIO_KEYS = ['objective', 'event', 'autoWinner', 'towerL1TeleopAllowed', 'faultsEnabled', 'contactFouls', 'cardLadder'];
 const SCENARIO_CHOICE = {
   objective: ['rs', 'rp'],
   event: ['regional', 'districtChamp'],

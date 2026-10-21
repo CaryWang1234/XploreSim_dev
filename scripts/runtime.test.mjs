@@ -528,6 +528,40 @@ test('the planner uses a declared AUTO instead of a cycle model it cannot see', 
   assert.ok(over <= estimate(capsFor([64, 64, 64])) + 1e-9, `a 200 FUEL declaration beat a 64 FUEL hopper (${over.toFixed(1)})`);
 });
 
+test('the card ladder takes the machine that earned the second YELLOW, and the absence costs points', () => {
+  const contactPlay = (seed, ladder) =>
+    simulateMatch({
+      redAlliance: makeAlliance(declaredTrio(null), 'red'),
+      blueAlliance: makeAlliance(declaredTrio(null), 'blue'),
+      redPolicy: greedyPolicy('red'),
+      bluePolicy: greedyPolicy('blue'),
+      scenario: { ...defaultScenario(), seed, contactFouls: true, cardLadder: ladder },
+      record: false,
+    });
+  let hit = null;
+  for (let i = 0; i < 40 && !hit; i++) {
+    const seed = 90001 + i * 313;
+    const res = contactPlay(seed, true);
+    const out = res.robotStats.find((s) => s.dq > 0);
+    if (out) hit = { seed, res, out };
+  }
+  assert.ok(hit, 'no DISQUALIFICATION in 40 MATCHes with contact fouls and the ladder on: the branch never fires');
+  const { seed, res, out } = hit;
+  assert.equal(out.dq, 1, `the same machine was disqualified ${out.dq} times`);
+  assert.ok(out.redCards >= 1, 'a DISQUALIFICATION without a RED CARD is not what §6.6.1 says');
+  // Every DQ is a RED, and the second-yellow path converts: the side tally cannot show a DQ it did not card.
+  assert.equal(res.cards[out.alliance].dq, res.cards[out.alliance].red, 'a machine was out without a RED CARD counted');
+  // And the enforcement changes the MATCH rather than the paperwork: the same seed, same trio, same policy,
+  // ladder off, leaves that machine scoring.
+  const off = contactPlay(seed, false);
+  const twin = off.robotStats.find((s) => s.alliance === out.alliance && s.slot === out.slot);
+  assert.equal(twin.dq, 0, 'the off value still disqualified someone');
+  assert.ok(twin.fuelScored > out.fuelScored, `the disqualified machine had scored ${out.fuelScored} and ${twin.fuelScored} with the ladder off`);
+  // Determinism, because the whole page is replayed from a seed.
+  const again = contactPlay(seed, true);
+  assert.equal(again.robotStats.reduce((a, s) => a + s.dq, 0), res.robotStats.reduce((a, s) => a + s.dq, 0));
+});
+
 test('a setup that cannot make a MATCH is refused rather than half-applied', () => {
   const built = buildSetup(shippedSetup());
   const bench = { p: 0, d: { plays: false } };
