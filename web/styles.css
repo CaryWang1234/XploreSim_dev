@@ -359,6 +359,11 @@ button:focus-visible, summary:focus-visible, [role="button"]:focus-visible, [rol
 .card .v { font-family: var(--mono); font-size: 20px; }
 .card .s { font-size: 11px; color: var(--dim); font-family: var(--mono); }
 canvas.chart { width: 100%; height: 120px; display: block; background: #0f161f; border: 1px solid var(--line); border-radius: 10px; }
+/* The four single-MATCH charts. One column on a narrow panel (the in-app preview is ~510 px), two on a wide
+   screen, so a band chart never has to squeeze six rows into 200 px. */
+.charts { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 6px 0 2px; }
+@media (min-width: 900px) { .charts { grid-template-columns: 1fr 1fr; } }
+canvas.chart.tall { height: 168px; }
 .rp-list { display: grid; gap: 6px; }
 .rp-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
 .rp-bar { height: 8px; background: #0f161f; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; grid-column: 1 / -1; }

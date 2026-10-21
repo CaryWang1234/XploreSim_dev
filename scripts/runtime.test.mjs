@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createWorkerClient } from '../web/js/worker-client.js';
-import { monteCarlo } from '../web/js/mc.js';
+import { monteCarlo, matchSeed } from '../web/js/mc.js';
+import { DEFAULT_WEIGHTS } from '../web/js/ai.js';
+import { SAMPLES } from '../web/js/model.js';
 import { FieldView } from '../web/js/viz.js';
 import { sampleReplay } from '../web/js/replay.js';
+import { modeBands, periodBands, robotRows, scoreSeries, sourceRows, strideOf, windowBands } from '../web/js/chartdata.js';
 
 test('export retains the last anchor and repeated exports do not degrade a replay', () => {
   const original = Array.from({ length: 12 }, (_, i) => ({ t: i / 10 }));
@@ -108,6 +111,37 @@ test('Monte Carlo rejects empty, fractional and unbounded batches before simulat
   assert.throws(() => monteCarlo({ matches: 1, aiSide: 'green' }), /aiSide/);
 });
 
+test('a batch row replays the MATCH it counted, and every extreme points at its own row', () => {
+  const common = {
+    profilesRed: SAMPLES.slice(0, 3).map((p) => structuredClone(p)),
+    profilesBlue: SAMPLES.slice(3, 6).map((p) => structuredClone(p)),
+    weights: DEFAULT_WEIGHTS,
+    iterations: 60,
+    seed: 20260110,
+    mode: 'vsBaseline',
+    opponentKind: 'greedy',
+    aiSide: 'red',
+  };
+  const r = monteCarlo({ ...common, matches: 3, recordFirst: true });
+  assert.deepEqual(r.rows.map((x) => x.n), [1, 2, 3]);
+  assert.deepEqual(r.rows.map((x) => x.seed), [0, 1, 2].map((i) => matchSeed(common.seed, i)));
+  for (const [key, at] of Object.entries(r.at)) {
+    const row = r.rows[at];
+    const value = key.endsWith('Ai') ? row.ai : key.endsWith('Opp') ? row.opp
+      : key.endsWith('Margin') ? row.margin : row.ai + row.opp;
+    if (key === 'bestTotal' || key === 'worstTotal') assert.equal(value, r[key], `${key} disagrees with its row`);
+    if (key === 'bestMargin') assert.equal(value, r.bestMargin, `${key} disagrees with its row`);
+  }
+  const top = r.rows[r.at.bestAi];
+  const again = monteCarlo({ ...common, matches: 1, seed: top.seed, recordFirst: true });
+  assert.equal(again.rows[0].ai, top.ai);
+  assert.equal(again.rows[0].opp, top.opp);
+  // Replaying MATCH 1 has to be the same replay the batch recorded, not a re-roll of the same seed family.
+  const first = monteCarlo({ ...common, matches: 1, seed: common.seed, recordFirst: true });
+  assert.equal(first.rows[0].ai, r.rows[0].ai);
+  assert.deepEqual(first.recorded.timeline, r.recorded.timeline);
+});
+
 test('static field is rasterized once, reused across frames, and refreshed after size/DPR changes', () => {
   const oldWindow = globalThis.window;
   globalThis.window = { devicePixelRatio: 1 };
@@ -142,5 +176,116 @@ test('static field is rasterized once, reused across frames, and refreshed after
   } finally {
     if (oldWindow === undefined) delete globalThis.window;
     else globalThis.window = oldWindow;
+  }
+});
+test('the single-MATCH flow ledger reaches the page and the live RP ladder reads one computation', () => {
+  const common = {
+    profilesRed: SAMPLES.slice(0, 3).map((p) => ({ ...p })),
+    profilesBlue: SAMPLES.slice(3, 6).map((p) => ({ ...p })),
+    weights: DEFAULT_WEIGHTS,
+    iterations: 40,
+    mode: 'vsBaseline',
+    opponentKind: 'greedy',
+    aiSide: 'red',
+  };
+  const { recorded } = monteCarlo({ ...common, seed: 20260110, matches: 1, recordFirst: true });
+  // The worker sends a whitelisted subset, so what has to survive is the part the page reads.
+  const stats = structuredClone(recorded.robotStats);
+  const hubReturned = structuredClone(recorded.hubReturned);
+  assert.equal(stats.length, 6);
+  for (const s of stats) {
+    const cf = s.collectFrom;
+    assert.equal(cf.neutral + cf.zone + cf.feed, s.fuelCollected, `${s.name} CORAL sources against what it took`);
+    const sec = Object.values(s.modeSec).reduce((a, v) => a + v, 0);
+    assert.ok(Math.abs(sec - s.activeSec) <= 0.2, `${s.name} mode seconds against ${s.activeSec} s live`);
+    const inches = Object.values(s.modeIn).reduce((a, v) => a + v, 0);
+    assert.ok(Math.abs(inches - s.distanceIn) <= 1, `${s.name} mode inches against ${s.distanceIn} in`);
+    assert.ok(s.fuelReclaimed <= s.fuelCollected, `${s.name} kept more than it took`);
+  }
+  assert.ok(hubReturned.red + hubReturned.blue > 0, 'no HUB handed anything back in a MATCH that scored FUEL');
+  assert.ok(stats.reduce((a, s) => a + s.fuelReclaimed, 0) > 0, 'nobody reclaimed a piece out of their own HUB returns');
+  assert.ok(stats.reduce((a, s) => a + s.modeSec.SCORE, 0) > 0);
+  // The scoreboard's live RP line compares the anchor's own counters against these thresholds, so the frame
+  // log and the verdict have to agree at the whistle or the line is a second model of the MATCH.
+  const th = recorded.final.red.rp.thresholds;
+  assert.ok(Number.isFinite(th.energized) && Number.isFinite(th.supercharged) && Number.isFinite(th.traversal));
+  const last = recorded.timeline.at(-1);
+  for (const side of ['red', 'blue']) {
+    assert.equal(last.s[side].fuel, recorded.final[side].fuel, `${side} FUEL on the last anchor against the ledger`);
+    assert.equal(last.s[side].tower, recorded.final[side].towerTotal, `${side} TOWER on the last anchor against the ledger`);
+    assert.equal(last.s[side].total, recorded.final[side].total);
+  }
+});
+
+// The four single-MATCH charts are drawn from the anchors, so a line on a canvas has to be the same number as
+// the column in the table above it. This runs the derivations the page runs, against the record a MATCH made.
+test('the single-MATCH charts derive from the anchors and agree with the ledger they sit under', () => {
+  const common = {
+    profilesRed: SAMPLES.slice(0, 3).map((p) => ({ ...p })),
+    profilesBlue: SAMPLES.slice(3, 6).map((p) => ({ ...p })),
+    weights: DEFAULT_WEIGHTS,
+    iterations: 40,
+    mode: 'vsBaseline',
+    opponentKind: 'greedy',
+    aiSide: 'red',
+  };
+  const { recorded } = monteCarlo({ ...common, seed: 20260110, matches: 1, recordFirst: true });
+  const tl = structuredClone(recorded.timeline);
+  const stats = structuredClone(recorded.robotStats);
+  const span = tl.at(-1).t;
+  assert.ok(tl.length > 1200, `${tl.length} anchors for a 160 s MATCH is below one per second`);
+
+  for (const side of ['red', 'blue']) {
+    const s = scoreSeries(tl, side);
+    assert.equal(s.t.at(-1), span, `${side} score series stops short of the whistle`);
+    assert.equal(s.v.at(-1), recorded.final[side].total, `${side} trend line ends somewhere other than the scoreboard`);
+    assert.ok(s.v.length <= 241, `${side} series draws ${s.v.length} points into a few hundred pixels`);
+  }
+
+  const bands = periodBands(tl);
+  assert.equal(bands[0].p, 'AUTO');
+  assert.equal(bands[0].t0, 0);
+  assert.equal(bands.at(-1).t1, span);
+  for (let i = 1; i < bands.length; i++) {
+    assert.ok(bands[i].t0 <= bands[i - 1].t1 + strideOf(tl), `period bands overlap or leave a hole at ${bands[i].t0}`);
+    assert.notEqual(bands[i].p, bands[i - 1].p, 'two neighbouring bands name the same period');
+  }
+
+  const stride = strideOf(tl);
+  for (const side of ['red', 'blue']) {
+    const on = windowBands(tl, side).filter((b) => b.on);
+    let sec = 0;
+    for (let i = 0; i < on.length; i++) {
+      assert.ok(on[i].t1 > on[i].t0, `${side} window band runs backwards`);
+      if (i) assert.ok(on[i].t0 >= on[i - 1].t1 - 1e-9, `${side} open windows overlap, so they were merged wrong`);
+      sec += on[i].t1 - on[i].t0;
+    }
+    const counted = tl.reduce((a, f) => a + (f.hub[side] ? stride : 0), 0);
+    assert.ok(Math.abs(sec - counted) <= stride * 2, `${side} bands read ${sec.toFixed(1)} s against the ${counted.toFixed(1)} s the note counts`);
+    assert.ok(sec > 0 && sec < span, `${side} HUB was open ${sec} s of ${span} s`);
+  }
+
+  const rows = robotRows(tl);
+  assert.equal(rows.length, stats.length);
+  for (const row of rows) {
+    const mb = modeBands(tl, row.pos);
+    let total = 0;
+    const byMode = {};
+    for (let i = 0; i < mb.length; i++) {
+      if (i) assert.notEqual(mb[i].m, mb[i - 1].m, 'two neighbouring intent bands are the same mode, so the merge missed');
+      total += mb[i].t1 - mb[i].t0;
+      byMode[mb[i].m] = (byMode[mb[i].m] || 0) + (mb[i].t1 - mb[i].t0);
+    }
+    assert.ok(Math.abs(total - span) <= stride * 2, `#${row.i} intent bands cover ${total.toFixed(1)} s of a ${span} s MATCH`);
+    for (const [m, sec] of Object.entries(byMode)) {
+      assert.ok(Math.abs(sec - stats[row.pos].modeSec[m]) <= stride * 3,
+        `#${row.i} ${m} reads ${sec.toFixed(1)} s on the band against ${stats[row.pos].modeSec[m].toFixed(1)} s in the table`);
+    }
+  }
+
+  const src = sourceRows(stats);
+  for (let i = 0; i < src.length; i++) {
+    assert.equal(src[i].taken, stats[i].fuelCollected);
+    assert.equal(src[i].neutral + src[i].zone + src[i].feed, src[i].taken, `${src[i].name} bar does not add up to its own length`);
   }
 });

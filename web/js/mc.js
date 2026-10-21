@@ -22,6 +22,24 @@ function buildMatchPolicies({ side, profiles, oppProfiles, weights, scenario, it
   });
 }
 
+// One definition of the batch's seed family, because the page replays a flagged MATCH by re-running the seed
+// that MATCH was measured on. A second copy of this arithmetic elsewhere is a different set of matches wearing
+// the same label.
+export const MATCH_STRIDE = 7919;
+export const matchSeed = (seed, i) => (seed + i * MATCH_STRIDE) >>> 0;
+
+// Which match sits at each end of a distribution, not just what value is there: a batch that says "the AI's best
+// was 712" without a match number describes a MATCH nobody can go and look at. First index wins a tie.
+export function extremes(values) {
+  let hi = 0;
+  let lo = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] > values[hi]) hi = i;
+    if (values[i] < values[lo]) lo = i;
+  }
+  return { best: values[hi], bestAt: hi, worst: values[lo], worstAt: lo };
+}
+
 export function monteCarlo(opts) {
   const {
     profilesRed,
@@ -79,12 +97,16 @@ export function monteCarlo(opts) {
   };
   let recorded = null;
   let plan = null;
+  // One row per MATCH: what it scored and which seed scored it, so the page can name the MATCH at the end of a
+  // distribution and replay it. The frames are not kept — a thousand of them would be the bulk of the page's
+  // memory, and every one is reproducible from the seed in this row.
+  const rows = [];
   // Fouls are assessed against a ROBOT, not against a wall colour, so a batch has to say which machine
   // is conceding them. Keyed by alliance and slot so the same seat's ROBOT is the same row every MATCH.
   const byRobot = new Map();
 
   for (let i = 0; i < matches; i++) {
-    const sc = { ...base, seed: (seed + i * 7919) >>> 0 };
+    const sc = { ...base, seed: matchSeed(seed, i) };
     const red = makeAlliance(profilesRed, 'red');
     const blue = makeAlliance(profilesBlue, 'blue');
     const alliances = { red, blue };
@@ -137,6 +159,7 @@ export function monteCarlo(opts) {
     const delta = a.total - o.total;
     agg.deltaHist[Math.min(10, Math.max(0, Math.floor((delta + 250) / 50)))] += 1;
     agg.marginTotal += delta;
+    rows.push({ n: i + 1, seed: sc.seed, ai: a.total, opp: o.total, margin: delta, foulsGiven: o.foulPoints });
     agg.foulsWon += a.foulPoints;
     agg.foulsGiven += o.foulPoints;
     agg.aiAutoFuel += (res.autoFuel && res.autoFuel[aSide]) || 0;
@@ -183,8 +206,27 @@ export function monteCarlo(opts) {
   const n = agg.matches;
   const pct = (v) => v / n;
   const mean = (v) => v / n;
+  const eAi = extremes(rows.map((r) => r.ai));
+  const eOpp = extremes(rows.map((r) => r.opp));
+  const eMargin = extremes(rows.map((r) => r.margin));
+  const eTotal = extremes(rows.map((r) => r.ai + r.opp));
   return {
     ...agg,
+    rows,
+    bestTotal: eTotal.best,
+    worstTotal: eTotal.worst,
+    // Which MATCH each extreme came out of. The page labels these rows and replays them by seed, so an index
+    // here is the difference between a distribution and a distribution nobody can look into.
+    at: {
+      bestAi: eAi.bestAt,
+      worstAi: eAi.worstAt,
+      bestOpp: eOpp.bestAt,
+      worstOpp: eOpp.worstAt,
+      bestMargin: eMargin.bestAt,
+      worstMargin: eMargin.worstAt,
+      bestTotal: eTotal.bestAt,
+      worstTotal: eTotal.worstAt,
+    },
     winRate: (agg.wins + 0.5 * agg.ties) / n,
     decisiveWinRate: agg.wins / n,
     avgAiScore: mean(agg.aiTotal),

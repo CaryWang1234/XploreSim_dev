@@ -5,6 +5,9 @@
 import { TIME, POINTS, FUEL, FIELD } from '../web/js/rules.js';
 import { defaultScenario, makeAlliance, makeRobot, SAMPLES, periodAt } from '../web/js/model.js';
 import { simulateMatch, INTENT, GEO, CONTACT_UNABLE_SEVERITY, segmentBoxEntry, bandAtX, bandRegionOf, BUMP_TRENCH_SEAM_IN } from '../web/js/engine.js';
+import { monteCarlo, matchSeed } from '../web/js/mc.js';
+import { DEFAULT_WEIGHTS } from '../web/js/ai.js';
+import { readFileSync } from 'node:fs';
 
 // Reference policy for engine validation: a plain greedy state machine with sticky behaviour
 // (no dithering) so the engine is exercised, not the policy. Deliberately ignores HUB windows
@@ -1165,8 +1168,119 @@ function fieldChecks(seed) {
   console.log(`  drivers: ${levels.map((l) => `${l.driver} aim ${l.shootAccuracy.toFixed(2)} / time x${l.aimFactor} / defence ${l.defenseSkill.toFixed(2)}`).join('  |  ')}`);
 }
 
+// The batch ladder: a batch keeps one row per MATCH, names the MATCHes at the ends of its distributions, and
+// replays a flagged row by re-running the seed it was measured on. Two things can go wrong and both are silent
+// in a browser — a row that points at the wrong MATCH, and a replay that re-rolls instead of reproducing — so
+// they are checked here. This also prints what a MATCH costs with the AI seat searching, which is the number the
+// page's cap is a statement about.
+// #129: the single-MATCH flow ledger — where a ROBOT took its FUEL from, how much of what its own HUB handed
+// back it got to keep, and what its seconds and its inches went on. All of it is bookkeeping, so the two
+// things worth holding are that the columns close on one another and that the reclaim column measures a real
+// mechanism: the control arm shuts the HUB exits, and a HUB that returns nothing has nothing to be reclaimed
+// from it.
+function flowChecks(seed) {
+  const run = (extra) => simulateMatch({
+    redAlliance: makeAlliance(SAMPLES.slice(0, 3).map((p) => ({ ...p })), 'red'),
+    blueAlliance: makeAlliance(SAMPLES.slice(3, 6).map((p) => ({ ...p })), 'blue'),
+    redPolicy: naivePolicy('red'),
+    bluePolicy: naivePolicy('blue'),
+    scenario: { ...defaultScenario(), seed, autoWinner: 'auto', ...extra },
+    record: true,
+  });
+  const wrong = [];
+  const tally = { taken: 0, neutral: 0, zone: 0, feed: 0, kept: 0, back: 0, scored: 0, wasted: 0, scoreSec: 0, feedSec: 0, droveIn: 0 };
+  for (const r of [run({}), run({ seed: seed + 977 })]) {
+    for (const s of r.robotStats) {
+      const cf = s.collectFrom;
+      const srcSum = cf.neutral + cf.zone + cf.feed;
+      if (srcSum !== s.fuelCollected) wrong.push(`${s.name}: its three sources sum to ${srcSum} but it took ${s.fuelCollected}`);
+      const sec = Object.values(s.modeSec).reduce((a, v) => a + v, 0);
+      if (Math.abs(sec - s.activeSec) > 0.2) wrong.push(`${s.name}: the mode clock reads ${sec.toFixed(1)} s against ${s.activeSec.toFixed(1)} s live`);
+      const inches = Object.values(s.modeIn).reduce((a, v) => a + v, 0);
+      if (Math.abs(inches - s.distanceIn) > 1) wrong.push(`${s.name}: the mode inches read ${inches.toFixed(0)} against ${s.distanceIn} in`);
+      if (s.fuelReclaimed > s.fuelCollected) wrong.push(`${s.name}: kept ${s.fuelReclaimed} of the ${s.fuelCollected} it took`);
+      tally.taken += s.fuelCollected;
+      tally.neutral += cf.neutral;
+      tally.zone += cf.zone;
+      tally.feed += cf.feed;
+      tally.kept += s.fuelReclaimed;
+      tally.scored += s.fuelScored;
+      tally.wasted += s.fuelWasted;
+      tally.scoreSec += s.modeSec.SCORE;
+      tally.feedSec += s.modeSec.FEED;
+      tally.droveIn += s.distanceIn;
+    }
+    tally.back += r.hubReturned.red + r.hubReturned.blue;
+  }
+  const shut = run({ hubExitRate: 0 });
+  const shutBack = shut.hubReturned.red + shut.hubReturned.blue;
+  const shutKept = shut.robotStats.reduce((a, s) => a + s.fuelReclaimed, 0);
+  if (shutBack > 0) wrong.push(`a HUB with its exits shut still handed ${shutBack} FUEL back onto the FIELD`);
+  if (shutKept > 0) wrong.push(`${shutKept} FUEL was reclaimed from HUBs that returned none`);
+  if (tally.feed <= 0) wrong.push('nobody took FUEL at a FEED outlet in either MATCH, so the split cannot tell a feed line from a collector');
+  if (tally.kept <= 0) wrong.push('no ALLIANCE kept anything out of its own HUB returns, so the reclaim column measures nothing');
+  if (wrong.length) throw new Error(`flow ledger: ${wrong.join('; ')}`);
+  console.log('--- single-MATCH flow ledger (where the FUEL came from, and what the windows were worth) ---');
+  console.log(`  ${tally.taken} FUEL taken over 2 MATCHes: ${tally.neutral} in the NEUTRAL ZONE, ${tally.zone} in an ALLIANCE ZONE, ${tally.feed} at a FEED outlet · the HUBs handed ${tally.back} back onto the FIELD and the fleets took ${tally.kept} of them (${Math.round((tally.kept / tally.back) * 100)}%)`);
+  console.log(`  ${tally.scored} went into an active HUB against ${tally.wasted} into a dark one, so ${Math.round((tally.scored / (tally.scored + tally.wasted)) * 100)}% of what reached a HUB reached a window · ${tally.scoreSec.toFixed(0)} s of SCORE mode and ${tally.feedSec.toFixed(0)} s of FEED mode over ${(tally.droveIn / 12 / 6).toFixed(0)} ft a ROBOT`);
+  console.log(`  with the exits shut the HUBs return ${shutBack} and the reclaim column reads ${shutKept}, which is the control: the column moves with the mechanism it names`);
+}
+
+function batchLadderChecks(seed) {
+  const max = Number(readFileSync(new URL('../web/js/ui.js', import.meta.url), 'utf8').match(/const MAX_BATCH = (\d+)/)?.[1]);
+  const common = {
+    profilesRed: SAMPLES.slice(0, 3).map((p) => ({ ...p })),
+    profilesBlue: SAMPLES.slice(3, 6).map((p) => ({ ...p })),
+    weights: DEFAULT_WEIGHTS,
+    iterations: 60,
+    mode: 'vsBaseline',
+    opponentKind: 'greedy',
+    aiSide: 'red',
+  };
+  const t0 = Date.now();
+  const r = monteCarlo({ ...common, seed, matches: 5, recordFirst: true });
+  const ms = (Date.now() - t0) / r.matches;
+  const wrong = [];
+  if (r.rows.length !== 5) wrong.push(`the batch returned ${r.rows.length} rows for 5 MATCHes`);
+  r.rows.forEach((row, i) => {
+    if (row.n !== i + 1) wrong.push(`row ${i} calls itself MATCH ${row.n}`);
+    if (row.seed !== matchSeed(seed, i)) wrong.push(`MATCH ${row.n} carries seed ${row.seed}, not ${matchSeed(seed, i)}`);
+  });
+  for (const [key, at] of Object.entries(r.at)) {
+    const row = r.rows[at];
+    if (!row) {
+      wrong.push(`${key} points outside the batch`);
+      continue;
+    }
+    const value = key.endsWith('Ai') ? row.ai : key.endsWith('Opp') ? row.opp
+      : key.endsWith('Margin') ? row.margin : row.ai + row.opp;
+    if (key === 'bestTotal' && value !== r.bestTotal) wrong.push(`bestTotal reads ${r.bestTotal} but MATCH ${row.n} scored ${value}`);
+    if (key === 'worstTotal' && value !== r.worstTotal) wrong.push(`worstTotal reads ${r.worstTotal} but MATCH ${row.n} scored ${value}`);
+    if (key === 'bestAi' && value !== r.bestScore) wrong.push(`bestAi points at MATCH ${row.n} on ${value}, the batch says best ${r.bestScore}`);
+    if (key === 'worstAi' && value !== r.worstScore) wrong.push(`worstAi points at MATCH ${row.n} on ${value}, the batch says worst ${r.worstScore}`);
+    if (key === 'bestMargin' && value !== r.bestMargin) wrong.push(`bestMargin points at MATCH ${row.n} on ${value}, the batch says ${r.bestMargin}`);
+  }
+  const flagged = [...new Set(Object.values(r.at))];
+  for (const at of flagged) {
+    const row = r.rows[at];
+    const again = monteCarlo({ ...common, seed: row.seed, matches: 1, recordFirst: true });
+    if (again.rows[0].ai !== row.ai || again.rows[0].opp !== row.opp) {
+      wrong.push(`replaying MATCH ${row.n} (seed ${row.seed}) gave ${again.rows[0].ai}-${again.rows[0].opp}, not ${row.ai}-${row.opp}`);
+    }
+  }
+  const first = monteCarlo({ ...common, seed, matches: 1, recordFirst: true });
+  if (JSON.stringify(first.recorded.timeline) !== JSON.stringify(r.recorded.timeline)) {
+    wrong.push('MATCH 1 does not replay to the frame log the batch recorded, so the page would load a different MATCH than the one it counted');
+  }
+  if (wrong.length) throw new Error(`batch ladder: ${wrong.join('; ')}`);
+  console.log('--- batch ladder (one row per MATCH, extremes named and replayable) ---');
+  console.log(`  ${r.rows.length} MATCHes, ${flagged.length} of them at the end of a distribution, and each replays to the scores it was counted at; MATCH 1 comes back as the same ${first.recorded.timeline.length}-anchor log`);
+  console.log(`  a MATCH costs ${ms.toFixed(0)} ms with the AI seat searching, so the page's ${max}-MATCH cap is ${(max * ms / 60000).toFixed(1)} min behind the progress bar`);
+}
+
 const t0 = Date.now();
 const rows = run(30, 20260110);
+const greedyMs = (Date.now() - t0) / rows.length;
 humanChecks(20260110);
 humanChecks(77003);
 feedChecks(20260110);
@@ -1181,8 +1295,10 @@ startChecks(20260110);
 spacingChecks(20260110);
 contactChecks(20260110);
 fieldChecks(20260110);
-const ms = Date.now() - t0;
+flowChecks(20260110);
+batchLadderChecks(20260110);
+const totalMs = Date.now() - t0;
 summarize(rows);
-console.log(`\ntiming: ${(ms / rows.length).toFixed(1)} ms per match (tick ${TIME.matchSec / 0.1} steps)`);
+console.log(`\ntiming: ${greedyMs.toFixed(1)} ms a greedy MATCH (${TIME.matchSec / 0.1} ticks of one engine); this whole run took ${(totalMs / 1000).toFixed(1)} s for its 30 MATCHes plus every check above`);
 console.log('declared FUEL staged', FUEL.stagedTotal, '| ENERGIZED threshold', POINTS.rpThreshold.energized.regional, '| SUPERCHARGED', POINTS.rpThreshold.supercharged.regional);
 console.log('\nOK: engine invariants hold.');

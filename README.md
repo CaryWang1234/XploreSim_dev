@@ -76,6 +76,44 @@ importing and re-exporting a recording does not repeatedly halve its resolution.
 Phase controls support Enter/Space; analysis tabs support Left/Right/Home/End with visible keyboard
 focus and tab/panel accessibility semantics. Status and progress have accessible text updates.
 
+A Monte Carlo batch returns one row per MATCH — number, seed, both scores, margin, foul points given —
+and the extremes carry the index of the MATCH they came from, so the page can name them and replay any of
+them. Replay is a re-run, not a stored log: `mc.js` owns the seed stride (`seed + i × 7919`) and the batch
+sends back the seed each row was measured on, so a flagged MATCH costs one more MATCH — `npm run verify`
+times both arms and prints them, 74 ms of the greedy engine against 286 ms with the AI seat searching — rather
+than a frame log kept for all 1200.
+The cap is `MAX_BATCH` in `ui.js`; `scripts/check_web.mjs` requires the two inputs' `max` attributes to carry
+the same number, and `verify.mjs` re-runs every flagged seed and requires the scores it printed, plus a
+byte-identical anchor log for MATCH 1.
+
+One MATCH is now read as a process, not only as a score. The scoreboard's second line per ALLIANCE is the RP
+ladder at the frame the scrubber is on (ENERGIZED / SUPERCHARGED / TRAVERSAL against the same thresholds the
+final verdict is graded with, taken from the anchor's own `s` block), and the Numbers tab's
+**FUEL flow and windows** table gives each ROBOT where its FUEL was when it took it (NEUTRAL ZONE / own
+ALLIANCE ZONE / FEED outlet), how much of what its own HUB handed back it kept, and how its seconds and its
+inches were spent across the nine intents. The engine counters behind them (`collectFrom`, `fuelReclaimed`,
+`modeSec`, `modeIn`, `hubReturned`) are bookkeeping only — no frame field, no event and no random draw is
+added, so `scripts/golden.mjs` still replays the same three digests. `verify.mjs`'s flow check holds that the
+three source columns sum to `fuelCollected`, that the mode clocks sum to `activeSec` and the mode inches to
+the distance already recorded, and that the reclaim column moves with the mechanism it names: with
+`hubExitRate: 0` the HUBs return nothing and the column reads zero. `scripts/runtime.test.mjs` additionally
+requires the last anchor's FUEL, TOWER and total to equal the final ledger, which is what lets the live line
+be the engine's own test rather than a second model of it.
+
+Under that table the Numbers tab draws four charts over the same anchors: the running score of both ALLIANCES
+with AUTO and END GAME shaded and a white line at the frame the FIELD is showing, the stretches each HUB would
+accept FUEL in, one row a ROBOT of the intent that was steering it, and one bar a ROBOT of FUEL taken split by
+NEUTRAL ZONE / own ALLIANCE ZONE / FEED outlet with its reclaim marked past the end of the bar. They are hand
+drawn on `<canvas>` by `web/js/ui.js` — no chart library, no request — and every series comes from
+`web/js/chartdata.js`, which touches no DOM so `scripts/runtime.test.mjs` can run the same derivations against
+a real record. That test is what makes the pictures claims rather than decoration: the two score lines must
+end on `final[side].total`, the window bands' open seconds must equal the seconds the note under the charts
+prints, the intent bands must cover the MATCH and each one must land within three decision strides of
+`modeSec`, the source bars must sum to `fuelCollected`, and a chart that samples keeps at most 241 points.
+Because the panels are hidden with `hidden`, a canvas in a panel that is not open has no box to draw into and
+falls back to 320 px, so entering the tab redraws all four and re-places the marker on the instant the replay
+is already showing. None of this reaches the record: `golden.mjs` still replays the same three digests.
+
 The field renderer caches static geometry at the current canvas size and pixel ratio; moving robots,
 FUEL, HUB state and HUMAN PLAYER actions are still drawn per frame. Resizing or changing pixel density
 rebuilds the background. The HUD updates its phase and HUB markup only when those values change.

@@ -7,10 +7,18 @@ import { FieldView } from './viz.js';
 import { PERIODS, periodSeconds } from './fastsim.js';
 import { createWorkerClient } from './worker-client.js';
 import { sampleReplay } from './replay.js';
+import { MODE_ORDER, modeBands, periodBands, robotRows, scoreSeries, sourceRows, windowBands } from './chartdata.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const fmt = (v, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : '—');
+
+// The ceiling on one batch, in MATCHes: the number the input's `max` carries, the clamp below applies, and
+// `npm run verify` asserts. A MATCH is a few tenths of a second with the AI seat searching — the guard times it
+// and prints the figure and the wall time this cap comes to — so a full batch is minutes behind a progress bar
+// and a cancel button. `mc.js` does not refuse to run above it — the command-line sweeps in scripts/ ask for
+// sizes a browser should not be made to wait through.
+const MAX_BATCH = 1200;
 
 const state = {
   rosters: {
@@ -21,6 +29,9 @@ const state = {
   calibration: null,
   result: null,
   timeline: null,
+  // The trend chart's drawn state, so the scrubber can move the marker without re-deriving 1601 anchors.
+  trend: null,
+  trendMarkerSec: -1,
   // What produced the replay currently on screen. Kept as run, because the sliders and the ROBOT cards
   // may have moved since, and Export has to write down what actually ran rather than what is showing.
   lastPayload: null,
@@ -36,6 +47,13 @@ const state = {
   bench: null,
   // The last batch's headline numbers, so the next batch can be read as a delta against it.
   prevBatch: null,
+  // One row per MATCH of the last batch (its number, its seed, both scores) plus the payload that batch ran
+  // under, so a flagged MATCH can be re-simulated to the seed it was measured on instead of stored. `batchMatch`
+  // is which row is on the FIELD; 0 means the replay on screen did not come from a batch.
+  batchRows: null,
+  batchResult: null,
+  batchInput: null,
+  batchMatch: 0,
   // The HUMAN PLAYER's two variables per alliance (§6.1): throws per second at their own HUB, and how
   // often that throw goes in. Everything else about the role is fixed by the OUTPOST rules.
   humanThrow: { red: 0.4, blue: 0.4 },
@@ -620,6 +638,20 @@ function paintHud(f, t) {
   // The recorder carries foul POINTS credited, not a count of opponent infractions.
   $('detail-red').textContent = `FUEL ${f.s.red.fuel} · TOWER ${f.s.red.tower} · +${f.s.red.fouls} BLUE foul points`;
   $('detail-blue').textContent = `FUEL ${f.s.blue.fuel} · TOWER ${f.s.blue.tower} · +${f.s.blue.fouls} RED foul points`;
+  // The RP ladder, on the frame the scrubber is sitting on rather than at the whistle. The two counters it
+  // reads are still climbing until the MATCH ends, and TOWER points in particular are not assessed until
+  // after it (§6.5-B/D), so this line answers "what would this be worth if the MATCH stopped here".
+  const th = state.result && state.result.final && state.result.final.red && state.result.final.red.rp && state.result.final.red.rp.thresholds;
+  if (th) {
+    $('rp-live-red').textContent = rpLadder(f.s.red, th);
+    $('rp-live-blue').textContent = rpLadder(f.s.blue, th);
+  } else {
+    $('rp-live-red').textContent = '';
+    $('rp-live-blue').textContent = '';
+  }
+  // The same instant the two lines above are read from, drawn on the trend chart. Once a second is enough:
+  // the marker is a second wide on a 160 s axis, so a faster redraw moves it less than a pixel.
+  trendMarkerAt(t);
   if (hudPeriod !== f.p) {
     hudPeriod = f.p;
     $('period-label').textContent = f.p;
@@ -947,7 +979,9 @@ function renderResult(res, ctx = {}) {
   const opp = ctx.opponentLabel || (ctx.opponentKind ? `${ctx.opponentKind} baseline` : 'the baseline');
   const side = (ctx.aiSide || 'red').toUpperCase();
   $('scope-batch').innerHTML =
-    matches > 1
+    ctx.batchMatch
+      ? `<b>MATCH ${ctx.batchMatch} of the ${ctx.batchTotal}-MATCH batch</b> · seed ${seed} · replayed under the settings that batch ran · ${side} was the AI against ${opp}. The cards above are this one MATCH; the notable list below still belongs to the batch.`
+      : matches > 1
       ? `<b>Monte-Carlo batch · ${matches} matches</b> · seed ${seed} · ${side} is the AI against ${opp} · objective ${ctx.objective || 'rs'} · ${ctx.event === 'districtChamp' ? 'DCMP thresholds' : 'regional thresholds'}`
       : `<b>One match, no distribution</b> · seed ${seed} · ${side} is the AI against ${opp}. Run the Monte-Carlo batch (10 or more matches) for win rates, spread and RP chances.`;
   $('batch-blocks').hidden = matches <= 1;
@@ -992,6 +1026,8 @@ function renderResult(res, ctx = {}) {
   renderPosterior(r.plan);
   renderInsights(r);
   renderDetail(r);
+  renderFlow(r);
+  renderMatchCharts(r);
   renderFouls(r);
   renderFoulBatch(r);
   renderFoulStrip(r);
@@ -1006,8 +1042,18 @@ const pct = (v) => `${Math.round(v * 100)}%`;
 
 // The per-MATCH numbers a planner argues about, which the batch used to reduce to "average score".
 function renderBatchTable(r, ctx) {
+  const at = r.at;
+  const atRow = (key) => r.rows?.[at?.[key]];
+  const where = (key) => (atRow(key) ? ` · MATCH ${atRow(key).n}` : '');
+  const marginNote = at
+    ? `widest win ${sign(atRow('bestMargin')?.margin ?? r.bestMargin)}${fmt(Math.abs(atRow('bestMargin')?.margin ?? r.bestMargin), 0)}${where('bestMargin')}, widest loss ${sign(atRow('worstMargin')?.margin ?? 0)}${fmt(Math.abs(atRow('worstMargin')?.margin ?? 0), 0)}${where('worstMargin')}`
+    : `best ${sign(r.bestMargin)}${fmt(Math.abs(r.bestMargin), 0)}`;
+  const scoreNote = at
+    ? `AI scores ran ${fmt(r.worstScore, 0)} (MATCH ${atRow('worstAi')?.n}) to ${fmt(r.bestScore, 0)} (MATCH ${atRow('bestAi')?.n})`
+    : `scores ranged ${fmt(r.worstScore, 0)} to ${fmt(r.bestScore, 0)}`;
   const rows = [
-    ['Point margin', `${sign(r.avgMargin)}${fmt(Math.abs(r.avgMargin), 0)} per match`, `best ${sign(r.bestMargin)}${fmt(Math.abs(r.bestMargin), 0)} · scores ranged ${fmt(r.worstScore, 0)} to ${fmt(r.bestScore, 0)}`],
+    ['Point margin', `${sign(r.avgMargin)}${fmt(Math.abs(r.avgMargin), 0)} per match`, `${marginNote} · ${scoreNote}`],
+    ['Highest / lowest combined', at ? `${r.bestTotal} · MATCH ${atRow('bestTotal')?.n}` : `${fmt(r.bestTotal, 0)}`, at ? `${r.worstTotal} · MATCH ${atRow('worstTotal')?.n}` : `${fmt(r.worstTotal, 0)}`],
     ['FUEL scored in AUTO', fmt(r.avgAutoFuel, 0), 'real finals 111–177; the AUTO winner sits out SHIFT 1 (Table 6-3)'],
     ['Foul points won / given away', `${fmt(r.avgFoulsWon, 1)} / ${fmt(r.avgFoulsGiven, 1)}`, 'Table 6-6: MINOR 5, MAJOR 15 to the opponent'],
     [
@@ -1481,6 +1527,303 @@ function renderDetail(r) {
     .join('')}</tbody>`;
 }
 
+// The three rungs the MATCH is worth, read off the frame the scrubber is on rather than off the whistle.
+// Everything in it is already on the anchor: `s` carries the FUEL and TOWER points banked by that instant,
+// and the thresholds come from the same `rp` block the final score is graded with, so this line and the
+// verdict at the end of the MATCH are one computation.
+function rpLadder(s, th) {
+  const rung = (name, got, need) => `${got >= need ? '✓' : '·'} ${name} ${got}/${need}`;
+  return `${rung('ENERGIZED', s.fuel, th.energized)} ${rung('SUPERCHARGED', s.fuel, th.supercharged)} ${rung('TRAVERSAL', s.tower, th.traversal)}`;
+}
+
+const MODE_COLS = ['SCORE', 'COLLECT', 'FEED', 'DEFEND', 'CLIMB'];
+
+// What the score does not say about a MATCH: where the FUEL was lying when a ROBOT took it, how much of what
+// its own HUB handed back it got to keep, and what it spent its seconds and its inches on. Every column is
+// either an engine counter (`collectFrom`, `fuelReclaimed`, `modeSec`, `modeIn`) or a share of the recorded
+// anchors, so this describes the MATCH that is playing rather than a model of one.
+function renderFlow(r) {
+  const stats = r.robotStats || [];
+  const tl = r.timeline || [];
+  const host = $('flow-table');
+  if (!stats.length) {
+    host.innerHTML = '';
+    $('flow-note').textContent = 'Run a MATCH to fill this in.';
+    return;
+  }
+  const ft = (inches) => (inches / 12).toFixed(1);
+  // NEUTRAL / own ZONE / FEED outlet, in the order the scouting report gives them. A machine that only ever
+  // fills the first column is spending its MATCH crossing the BUMPS to get to the middle.
+  const mix = (s) => `${s.collectFrom.neutral} / ${s.collectFrom.zone} / ${s.collectFrom.feed}`;
+  const rows = stats
+    .map((s) => `<tr><td><span class="dot ${s.alliance}"></span>${s.alliance === 'red' ? 'RED' : 'BLUE'}</td><td>${esc(s.name)}</td>
+      <td class="mono">${s.fuelCollected}</td><td class="mono">${mix(s)}</td><td class="mono">${s.fuelReclaimed}</td>
+      ${MODE_COLS.map((m) => `<td class="mono">${fmt(s.modeSec[m] || 0, 1)}s</td>`).join('')}
+      <td class="mono">${ft(s.modeIn.SCORE || 0)}</td><td class="mono">${ft(s.distanceIn)}</td></tr>`)
+    .join('');
+  host.innerHTML = `<thead><tr><th>Alliance</th><th>ROBOT</th><th class="mono">FUEL taken</th><th class="mono">Taken from: NEUTRAL / ZONE / FEED</th><th class="mono">Own HUB returns kept</th>${MODE_COLS.map((m) => `<th class="mono">${m} s</th>`).join('')}<th class="mono">SCORE ft</th><th class="mono">Drove ft</th></tr></thead><tbody>${rows}</tbody>`;
+
+  const stride = tl.length > 1 ? tl[1].t - tl[0].t : 0.1;
+  const open = (side) => tl.reduce((a, f) => a + (f.hub[side] ? stride : 0), 0);
+  const line = (side) => {
+    const g = stats.filter((s) => s.alliance === side);
+    const taken = g.reduce((a, s) => a + s.fuelCollected, 0);
+    const from = (k) => g.reduce((a, s) => a + s.collectFrom[k], 0);
+    const scored = g.reduce((a, s) => a + s.fuelScored, 0);
+    const wasted = g.reduce((a, s) => a + s.fuelWasted, 0);
+    const kept = g.reduce((a, s) => a + s.fuelReclaimed, 0);
+    const back = r.hubReturned ? r.hubReturned[side] : 0;
+    const eff = scored + wasted ? Math.round((scored / (scored + wasted)) * 100) : 0;
+    const recl = back ? Math.round((kept / back) * 100) : 0;
+    return `${side.toUpperCase()} took ${taken} FUEL (${from('neutral')} in the NEUTRAL ZONE, ${from('zone')} in its own, ${from('feed')} at the FEED outlet) while its HUB was open ${fmt(open(side), 1)}s of the ${fmt(tl.length * stride, 0)}s · ${scored} went into an active HUB against ${wasted} into a dark one, so ${eff}% of what reached the HUB reached a window · its own HUB handed ${back} back onto the FIELD and it took ${kept} of them, ${recl}%`;
+  };
+  $('flow-note').textContent =
+    `${line('red')} · ${line('blue')} · FUEL taken is one piece at the mouth, so the 8 a ROBOT starts with (§6.3.4-C) is not counted as taken. HUB returns are the FUEL that came back out of that ALLIANCE's own HUB (§5.4), and the share it took again is what says whether the HUB was feeding it or feeding the other side. This is the MATCH on the FIELD, not the batch.`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Single-MATCH charts (plain canvas, no libraries). Every series is derived in `chartdata.js` from the
+// anchors the engine already wrote, so a line on these canvases and the column in the table above it are
+// the same number; nothing here reads a model or a stored expectation.
+// ---------------------------------------------------------------------------------------------
+const MODE_COLOR = {
+  COLLECT: '#3f8ecb', STOCKPILE: '#6c7f9c', SCORE: '#f0b429', PASS: '#8fd6bd', PUSH: '#4fb0a5',
+  DEFEND: '#c86a5a', CLIMB: '#a56fd6', FEED: '#d6a55f', IDLE: '#222d3c',
+};
+const SOURCE_COLOR = { neutral: '#7f93b0', zone: '#4faf88', feed: '#f0b429' };
+const SIDE_COLOR = { red: '#e0596a', blue: '#4f8fe0' };
+
+function timeX(t, span, padL, padR, w) {
+  return padL + (span > 0 ? t / span : 0) * (w - padL - padR);
+}
+
+// The shared x-axis: ticks every 30 s, so AUTO (0-15), the four TELEOP shifts and END GAME line up with a
+// labelled edge instead of an unlabeled stretch.
+function drawTimeAxis(ctx, w, h, padL, padB, span) {
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = AXIS;
+  for (let t = 0; t <= span + 0.001; t += 30) {
+    const x = timeX(t, span, padL, 8, w);
+    ctx.fillText(`${Math.round(t)}s`, x, h - 4);
+  }
+}
+
+function linesChart(canvas, series, opts) {
+  if (!canvas) return;
+  const { span, periods = [], markerT = null, hi } = opts;
+  const { ctx, w, h } = prepCanvas(canvas);
+  const padL = 30;
+  const padB = 14;
+  const padT = 10;
+  const top = Math.max(1, hi ?? Math.max(1, ...series.flatMap((s) => s.y)));
+  if (periods.length) {
+    for (const p of periods) {
+      const x0 = timeX(p.t0, span, padL, 8, w);
+      const x1 = timeX(p.t1, span, padL, 8, w);
+      ctx.fillStyle = p.p === 'AUTO' ? 'rgba(240,180,41,0.10)' : p.p === 'END GAME' ? 'rgba(165,111,214,0.12)' : 'rgba(255,255,255,0.02)';
+      ctx.fillRect(x0, padT, Math.max(1, x1 - x0), h - padB - padT);
+      if (w > 380 && x1 - x0 > 26) {
+        ctx.fillStyle = AXIS;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.font = '8px ui-monospace, monospace';
+        ctx.fillText(p.p === 'END GAME' ? 'END' : p.p, x0 + 2, padT + 1);
+      }
+    }
+  }
+  drawYAxis(ctx, w, h, padL, padB, padT, 0, top, (v) => String(Math.round(v)));
+  drawTimeAxis(ctx, w, h, padL, padB, span);
+  for (const s of series) {
+    ctx.beginPath();
+    s.x.forEach((t, i) => {
+      const x = timeX(t, span, padL, 8, w);
+      const y = h - padB - (s.y[i] / top) * (h - padB - padT);
+      if (i) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+    });
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+  if (markerT !== null) trendMarker(ctx, w, h, padL, padB, padT, span, markerT);
+}
+
+// The scrubber position, drawn last so it is always on top of the line it is pointing at.
+function trendMarker(ctx, w, h, padL, padB, padT, span, markerT) {
+  const x = timeX(markerT, span, padL, 8, w);
+  ctx.strokeStyle = '#e8eef7';
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.65;
+  ctx.beginPath();
+  ctx.moveTo(x + 0.5, padT);
+  ctx.lineTo(x + 0.5, h - padB);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// Rows of coloured stretches: the HUB windows on one chart, the per-ROBOT intents on another. Same geometry
+// both times, because both are "which of these mutually exclusive things was true at this instant".
+function bandChart(canvas, rows, opts) {
+  if (!canvas) return;
+  const { span, colorOf, labelOf } = opts;
+  const { ctx, w, h } = prepCanvas(canvas);
+  const padL = w > 320 ? 62 : 44;
+  const padB = 14;
+  const padT = 6;
+  const rowH = Math.max(6, (h - padB - padT) / Math.max(1, rows.length));
+  ctx.font = '9px ui-monospace, monospace';
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const y = padT + i * rowH;
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fillRect(padL, y + 1, w - padL - 6, rowH - 3);
+    for (const seg of row.segments) {
+      const x0 = timeX(seg.t0, span, padL, 6, w);
+      const x1 = timeX(seg.t1, span, padL, 6, w);
+      ctx.fillStyle = colorOf(seg, row);
+      ctx.fillRect(x0, y + 1, Math.max(0.6, x1 - x0), rowH - 3);
+    }
+    ctx.fillStyle = AXIS;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(labelOf(row), padL - 4, y + rowH / 2);
+  }
+  drawTimeAxis(ctx, w, h, padL, padB, span);
+}
+
+// One horizontal bar a ROBOT: the FUEL it took, split by where it was lying. The tick past the end is what its
+// own HUB handed back onto the FIELD and it took again — a share of a different total, so it is a mark, not a
+// fourth segment, and the bar keeps reading as `taken`.
+function sourceChart(canvas, rows, max) {
+  if (!canvas) return;
+  const { ctx, w, h } = prepCanvas(canvas);
+  const padL = w > 320 ? 74 : 52;
+  const padB = 14;
+  const padT = 6;
+  const rowH = Math.max(7, (h - padB - padT) / Math.max(1, rows.length));
+  const scale = (w - padL - 26) / Math.max(1, max);
+  ctx.font = '9px ui-monospace, monospace';
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const y = padT + i * rowH;
+    let x = padL;
+    for (const key of ['neutral', 'zone', 'feed']) {
+      const bw = r[key] * scale;
+      if (!bw) continue;
+      ctx.fillStyle = key === 'zone' ? SIDE_COLOR[r.alliance] : SOURCE_COLOR[key];
+      ctx.fillRect(x, y + 1, Math.max(0.6, bw), rowH - 3);
+      x += bw;
+    }
+    ctx.fillStyle = '#cdd8e8';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(r.taken), padL + r.taken * scale + 14, y + rowH / 2);
+    if (r.kept) {
+      const kx = padL + (r.taken + r.kept) * scale;
+      ctx.strokeStyle = SIDE_COLOR[r.alliance];
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(kx, y);
+      ctx.lineTo(kx, y + rowH);
+      ctx.stroke();
+    }
+    ctx.fillStyle = AXIS;
+    ctx.textAlign = 'right';
+    ctx.fillText(r.name.length > 10 ? `${r.name.slice(0, 9)}…` : r.name, padL - 4, y + rowH / 2);
+  }
+  ctx.fillStyle = AXIS;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(`${Math.round(max)} FUEL`, padL, h - 3);
+}
+
+function anchorsOf(r) {
+  return r.timeline || (r.recorded && r.recorded.timeline) || [];
+}
+
+function renderMatchCharts(r) {
+  const tl = anchorsOf(r);
+  const stats = r.robotStats || [];
+  if (!tl.length || !stats.length) return;
+  const span = tl[tl.length - 1].t;
+  const periods = periodBands(tl);
+  const red = scoreSeries(tl, 'red');
+  const blue = scoreSeries(tl, 'blue');
+  const hi = Math.max(red.v[red.v.length - 1], blue.v[blue.v.length - 1]);
+  state.trend = { span, periods, series: [{ x: red.t, y: red.v, color: SIDE_COLOR.red }, { x: blue.t, y: blue.v, color: SIDE_COLOR.blue }], hi, markerT: null };
+  state.trendMarkerSec = -1;
+  drawTrend();
+
+  bandChart($('chart-window'), [['red', 'RED'], ['blue', 'BLUE']].map(([side, label]) => ({
+    label,
+    side,
+    segments: windowBands(tl, side).filter((b) => b.on).map((b) => ({ t0: b.t0, t1: b.t1 })),
+  })), {
+    span,
+    colorOf: () => '#4faf88',
+    labelOf: (row) => row.label,
+  });
+
+  const rows = robotRows(tl);
+  bandChart($('chart-roles'), rows.map((row) => ({
+    row,
+    segments: modeBands(tl, row.pos).map((b) => ({ t0: b.t0, t1: b.t1, m: b.m })),
+  })), {
+    span,
+    colorOf: (seg) => MODE_COLOR[seg.m] || MODE_COLOR.IDLE,
+    labelOf: (x) => `#${x.row.i}`,
+  });
+
+  const src = sourceRows(stats);
+  sourceChart($('chart-sources'), src, Math.max(1, ...src.map((x) => x.taken + x.kept)));
+  const openSec = (side) => windowBands(tl, side).filter((b) => b.on).reduce((a, b) => a + (b.t1 - b.t0), 0);
+  const top = src.reduce((a, x) => a + x.taken, 0);
+  const kept = src.reduce((a, x) => a + x.kept, 0);
+  const back = ['red', 'blue'].reduce((a, side) => a + (r.hubReturned ? r.hubReturned[side] : 0), 0);
+  $('chart-shape-note').textContent =
+    `Top: what each ALLIANCE was worth at each instant, with AUTO shaded gold and END GAME violet, and the white line at the frame the FIELD is showing. `
+    + `Second: the stretches in which that ALLIANCE's HUB would take FUEL at all — the AUTO and END GAME windows included, because this is read off the anchors and not off the shift schedule. `
+    + `Third: what each ROBOT was told to be doing, in order ${MODE_ORDER.join(' / ')}, one row per ROBOT in build order. `
+    + `Bottom: FUEL each ROBOT took, split by where it was lying — NEUTRAL ZONE grey, its own ALLIANCE ZONE in its side's colour, the FEED outlet amber — and the tick past the end of a bar is what its own HUB handed back onto the FIELD and that ROBOT took again. `
+    + `This batch of bars is ${top} FUEL taken, ${kept} of it reclaimed out of the ${back} the two HUBs returned.`
+    + ` Open HUB seconds: RED ${fmt(openSec('red'), 1)} s, BLUE ${fmt(openSec('blue'), 1)} s of a ${fmt(span, 0)} s MATCH.`;
+}
+
+function redrawMatchCharts() {
+  if (!state.result) return;
+  // The page keeps the anchors in `state.timeline`, not on the result it was handed, so a redraw that only
+  // looked at `state.result` would find no record and leave four empty canvases under a tab that had been
+  // drawn once already.
+  const r = anchorsOf(state.result).length || !state.timeline ? state.result : { ...state.result, timeline: state.timeline };
+  renderMatchCharts(r);
+  // renderMatchCharts starts with no marker line, and this is the call that fires when the panel is opened —
+  // so the line has to go back on the instant the FIELD is already showing. Without it the white line only
+  // returns on the next scrub, and opening the tab mid-replay looks like it dropped the replay's own clock.
+  trendMarkerAt(state.playT || 0);
+}
+
+// Redrawn as the scrubber moves, which is the whole point of the trend chart: where the white line sits against
+// the shaded AUTO and END GAME bands is what says whether a MATCH was won in the first 15 seconds or lost there.
+function drawTrend() {
+  const d = state.trend;
+  // Skip while the Numbers panel is hidden: the canvas has no box to draw into there, and the playback loop
+  // would repaint it once per frame for nothing. Switching to the panel redraws everything.
+  if (!d || $('tab-detail').hidden) return;
+  linesChart($('chart-trend'), d.series, { span: d.span, periods: d.periods, hi: d.hi, markerT: d.markerT });
+}
+
+function trendMarkerAt(t) {
+  if (!state.trend) return;
+  const s = Math.round(t);
+  if (s === state.trendMarkerSec) return;
+  state.trendMarkerSec = s;
+  state.trend.markerT = t;
+  drawTrend();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Static reference tables
 // ---------------------------------------------------------------------------------------------
@@ -1730,6 +2073,9 @@ function importMatch(text, label) {
   data.result.timeline = data.frames;
   $('scrub').max = String(data.frames.length - 1);
   renderResult(data.result, state.lastCtx);
+  // An imported MATCH did not come from this browser's batch, so the ladder stops marking a row as on screen.
+  state.batchMatch = 0;
+  renderNotable();
   setFrame(0);
   const who = data.result.final
     ? `${Math.round(data.result.final.red.total)} / ${Math.round(data.result.final.blue.total)}`
@@ -1753,8 +2099,14 @@ async function runSingle() {
     state.lastPayload = inputs;
     state.timeline = res.timeline;
     state.lastCtx = ctx;
+    // One MATCH typed into the seed box is not part of any batch, so the ladder stops claiming it is.
+    state.batchRows = null;
+    state.batchResult = null;
+    state.batchInput = null;
+    state.batchMatch = 0;
     $('scrub').max = String(Math.max(0, (res.timeline ? res.timeline.length : 1) - 1));
     renderResult(res, state.lastCtx);
+    renderNotable();
     setFrame(0);
     startPlayback();
     status('Match done', 'ok');
@@ -1768,7 +2120,8 @@ async function runSingle() {
 
 async function runMonteCarlo() {
   if (state.busy) return;
-  const matches = Math.round(Math.max(10, Math.min(600, Number($('inp-mcmatches').value) || 120)));
+  const matches = Math.round(Math.max(10, Math.min(MAX_BATCH, Number($('inp-mcmatches').value) || 120)));
+  $('inp-mcmatches').value = String(matches);
   const opp = opponentPick();
   busy(true);
   state.lastRun = 'batch';
@@ -1787,8 +2140,13 @@ async function runMonteCarlo() {
     state.lastPayload = inputs;
     state.timeline = res.timeline;
     state.lastCtx = ctx;
+    state.batchInput = inputs;
+    state.batchRows = res.rows?.length ? res.rows : null;
+    state.batchResult = res;
+    state.batchMatch = state.batchRows ? 1 : 0;
     $('scrub').max = String(Math.max(0, (res.timeline ? res.timeline.length : 1) - 1));
     renderResult(res, state.lastCtx);
+    renderNotable();
     setFrame(0);
     status(`Monte Carlo done (${matches} matches)`, 'ok');
   } catch (e) {
@@ -1797,6 +2155,88 @@ async function runMonteCarlo() {
     busy(false);
     setProgress(false);
   }
+}
+
+// Replay one MATCH out of the batch on screen: the engine runs that seed again under the settings the batch used,
+// so what loads is the MATCH the distribution counted rather than a similar one. The rows carry their seeds, so
+// a thousand MATCHes stay reachable without keeping a thousand frame logs.
+async function replayBatchMatch(n) {
+  if (state.busy || !state.batchRows || !state.batchInput) return;
+  const row = state.batchRows.find((r) => r.n === n);
+  if (!row) {
+    status(`MATCH ${n} is not in this batch — it ran ${state.batchRows.length}`, 'err');
+    return;
+  }
+  busy(true);
+  state.lastRun = 'replay';
+  status(`Replaying MATCH ${n} (seed ${row.seed})…`, 'busy');
+  setProgress(true, 0.2, '1 MATCH');
+  try {
+    const res = await ask('mc', { ...state.batchInput, matches: 1, recordFirst: true, seed: row.seed });
+    pausePlayback();
+    state.lastPayload = { ...state.batchInput, matches: 1, recordFirst: true, seed: row.seed };
+    state.timeline = res.timeline;
+    state.batchMatch = n;
+    // The scope line has to name this as a MATCH out of the batch, or the panel reads as a fresh single run and
+    // the reader cannot tell whether what is below is the distribution or one MATCH from it.
+    state.lastCtx = { ...state.lastCtx, matches: 1, seed: row.seed, batchMatch: n, batchTotal: state.batchRows.length };
+    $('scrub').max = String(Math.max(0, (res.timeline ? res.timeline.length : 1) - 1));
+    renderResult(res, state.lastCtx);
+    renderNotable();
+    setFrame(0);
+    status(`MATCH ${n} of the batch · seed ${row.seed} · ${row.ai}-${row.opp}`, 'ok');
+  } catch (e) {
+    taskFailure('Replay failed', e);
+  } finally {
+    busy(false);
+    setProgress(false);
+  }
+}
+
+// The MATCHes at the ends of the batch's distributions, each one reachable. Without this, "the AI's best was 712"
+// is a number with no way to find out what happened in that MATCH.
+function renderNotable() {
+  const host = $('match-table');
+  const note = $('match-note');
+  const inp = $('inp-replay-match');
+  const rows = state.batchRows;
+  const at = state.batchResult?.at;
+  if (!rows?.length || !at) {
+    host.innerHTML = '';
+    inp.max = '1';
+    note.textContent = 'Run the Monte Carlo batch and this lists the MATCHes at the ends of its distributions, each one replayable.';
+    return;
+  }
+  inp.max = String(rows.length);
+  const labels = new Map();
+  const say = (key, text) => {
+    const row = rows[at[key]];
+    if (row) labels.set(row.n, [...(labels.get(row.n) || []), text(row)]);
+  };
+  say('bestAi', (r) => `the AI seat's best score, ${r.ai}`);
+  say('worstAi', (r) => `the AI seat's worst score, ${r.ai}`);
+  say('bestOpp', (r) => `what the opponent did best, ${r.opp}`);
+  say('worstOpp', (r) => `what the opponent did worst, ${r.opp}`);
+  say('bestMargin', (r) => `widest AI win, +${r.margin}`);
+  say('worstMargin', (r) => `widest AI loss, ${sign(r.margin)}${Math.abs(r.margin)}`);
+  say('bestTotal', (r) => `${r.ai + r.opp} points between the two ALLIANCES`);
+  say('worstTotal', (r) => `${r.ai + r.opp} points between the two ALLIANCES, the quietest MATCH of the batch`);
+  const body = [];
+  for (const row of rows) {
+    if (!labels.has(row.n)) continue;
+    body.push(
+      `<tr><td class="mono">${row.n}</td><td class="mono">${row.seed}</td><td class="mono">${row.ai} - ${row.opp}</td>` +
+        `<td class="mono">${sign(row.margin)}${Math.abs(row.margin)}</td><td class="mono">${fmt(row.foulsGiven, 0)}</td>` +
+        `<td class="hint">${esc(labels.get(row.n).join(' · '))}</td>` +
+        `<td><button class="btn" type="button" data-match="${row.n}"${state.batchMatch === row.n ? ' disabled' : ''}>` +
+        `${state.batchMatch === row.n ? 'on the FIELD' : 'replay'}</button></td></tr>`,
+    );
+  }
+  host.innerHTML = '<thead><tr><th>MATCH</th><th>seed</th><th>AI - opponent</th><th>margin</th><th>foul points given</th><th>why it stands out</th><th></th></tr></thead><tbody>' + body.join('') + '</tbody>';
+  host.querySelectorAll('button[data-match]').forEach((b) => b.addEventListener('click', () => void replayBatchMatch(Number(b.dataset.match))));
+  note.textContent = state.batchMatch
+    ? `MATCH ${state.batchMatch} of ${rows.length} is on the FIELD, at seed ${rows[state.batchMatch - 1].seed} and the settings this batch ran. Pick any number up to ${rows.length} to load that one instead.`
+    : `This batch ran ${rows.length} MATCHes on seeds ${state.batchInput?.seed ?? '—'} + i × 7919. Pick a number to replay one; the engine is deterministic, so what loads is the MATCH the distribution above counted.`;
 }
 
 async function runBench() {
@@ -1899,6 +2339,12 @@ function boot() {
 
   $('btn-run').addEventListener('click', runSingle);
   $('btn-mc').addEventListener('click', runMonteCarlo);
+  $('btn-replay-match').addEventListener('click', () => {
+    const last = state.batchRows?.length || 1;
+    const n = Math.max(1, Math.min(last, Math.round(Number($('inp-replay-match').value) || 1)));
+    $('inp-replay-match').value = String(n);
+    void replayBatchMatch(n);
+  });
   $('btn-cancel').addEventListener('click', () => {
     if (!state.busy) return;
     $('btn-cancel').disabled = true;
@@ -2031,6 +2477,9 @@ function boot() {
       }
       for (const b of document.querySelectorAll('.tab-body')) b.hidden = b.id !== `tab-${t.dataset.tab}`;
       if (t.dataset.tab === 'insight') redrawInsightCharts();
+      // The panel is `hidden` until this line runs, so a chart drawn when the result came back measured zero
+      // and kept the fallback width. Redraw on the way in, the same reason the Tactics charts redraw on it.
+      if (t.dataset.tab === 'detail') redrawMatchCharts();
     });
     t.addEventListener('keydown', (event) => {
       const index = tabs.indexOf(t);

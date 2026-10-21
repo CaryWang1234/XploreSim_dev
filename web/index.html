@@ -77,8 +77,8 @@
             <label>Random seed
               <input id="inp-seed" type="number" value="20260110" step="1" />
             </label>
-            <label>Monte Carlo matches
-              <input id="inp-mcmatches" type="number" value="120" min="10" max="600" step="10" />
+            <label title="How many MATCHes the batch runs. Each one is the real engine with the AI seat searching: npm run verify times both arms and prints them — 286 ms a MATCH with the AI searching against 74 ms greedy — so the 1200 cap this page puts on a run is about six minutes behind the progress bar, cancellable at any point. The standard error of the mean falls as 1/√n, so 480 buys half the bar 120 prints and 1200 buys a third.">Monte Carlo matches
+              <input id="inp-mcmatches" type="number" value="120" min="10" max="1200" step="10" />
             </label>
             <label>Search iterations (per decision)
               <input id="inp-iter" type="number" value="200" min="40" max="600" step="20" />
@@ -120,6 +120,7 @@
             <strong id="score-red">0</strong>
             <span class="teams" id="teams-red">—</span>
             <span class="detail" id="detail-red">FUEL 0 · TOWER 0 · Fouls 0</span>
+            <span class="detail" id="rp-live-red">—</span>
           </div>
           <div class="clock">
             <div class="period" id="period-label">—</div>
@@ -132,6 +133,7 @@
             <strong id="score-blue">0</strong>
             <span class="teams" id="teams-blue">—</span>
             <span class="detail" id="detail-blue">FUEL 0 · TOWER 0 · Fouls 0</span>
+            <span class="detail" id="rp-live-blue">—</span>
           </div>
         </div>
         <!-- One chip per ROBOT that took a foul, so the scoreboard says which machine and not just which
@@ -221,6 +223,18 @@
             <div class="table-wrap"><table id="batch-table"></table></div>
             <div id="batch-delta"></div>
           </div>
+          <!-- essay kept in source only, not rendered ─────────────────────────────
+          <p class="hint">A distribution is otherwise unreadable: the batch can say the AI's best MATCH was 712 and give no way to find out what happened in it. So every batch keeps one row per MATCH — its number, its seed, both scores, the margin and the foul points it handed over — and this lists the rows at the ends: the AI's best and worst, the opponent's best and worst, the widest win and the widest loss, and the highest and lowest combined. Press replay and the engine runs that seed again with the settings the batch used, and the MATCH that loads is the one the distribution counted, not a similar one: the engine draws its randomness from the seed, and <code>npm run verify</code> holds that equality by re-running every flagged row and requiring the scores it prints, plus a byte-for-byte digest for MATCH 1. Nothing is stored to make this cheap — a thousand frame logs would be most of the page's memory, and a row that points at a seed is the same information in six numbers.</p>
+          ────────────────────────────────────────── -->
+          <h3>Notable matches</h3>
+          <div class="table-wrap"><table id="match-table"></table></div>
+          <div class="run-row">
+            <button class="btn" id="btn-replay-match" type="button" title="Re-run the engine on one MATCH of the batch, at the seed that MATCH was measured on, and load it onto the field. About half a second.">Replay a match from the batch</button>
+            <label title="Which MATCH of the batch — 1 is the first seed, and the batch ran them in order. The table above lists the ones at the ends of the distributions.">number
+              <input id="inp-replay-match" type="number" value="1" min="1" max="1200" step="1" />
+            </label>
+          </div>
+          <p class="hint" id="match-note">Run the Monte Carlo batch and this lists the MATCHes at the ends of its distributions, each one replayable.</p>
           <p class="scope" id="scope-replay"></p>
           <h3>Plan the AI chose</h3>
           <div id="plan-view" class="plan-view"></div>
@@ -233,6 +247,30 @@
         <div class="tab-body" id="tab-detail" hidden>
           <h3>Robot numbers</h3>
           <div class="table-wrap"><table id="robot-table"></table></div>
+          <h3>FUEL flow and windows</h3>
+          <!-- essay kept in source only, not rendered ─────────────────────────────
+          <p>The scoreboard already says what a MATCH is worth; this says how it was spent. <b>FUEL taken</b> is
+          one piece into the hopper, and the three columns after it say where that piece was lying when the
+          mouth closed: the NEUTRAL ZONE, this ROBOT's own ALLIANCE ZONE, or at the CHUTE outlet the HUMAN
+          PLAYER dumps through. That separates a collector from a feed line even though both end up with the
+          same points. <b>Own HUB returns kept</b> is the reclaim: FUEL that went into this ALLIANCE's HUB came
+          back out onto the FIELD (§5.4), and the share the same ALLIANCE took again is what says whether that
+          HUB was feeding it or feeding the other side. The mode columns are the same tick the physics runs,
+          charged to the intent that was steering, so <b>SCORE s</b> is time at the shooting face and
+          <b>FEED s</b> is time spent handing FUEL to the HUMAN PLAYER; the inches are charged the same way.
+          Under the table, the HUB-open seconds are counted off the recorded anchors rather than off the shift
+          schedule, so they include the AUTO and END GAME windows the schedule does not list.</p>
+          ────────────────────────────────────────── -->
+          <div class="table-wrap"><table id="flow-table"></table></div>
+          <p class="hint" id="flow-note"></p>
+          <h3>What the MATCH looked like</h3>
+          <div class="charts">
+            <canvas class="chart tall" id="chart-trend" aria-label="Running score of both alliances across the MATCH, with AUTO and END GAME shaded and a line at the frame being shown"></canvas>
+            <canvas class="chart" id="chart-window" aria-label="The stretches in which each alliance's HUB would accept FUEL"></canvas>
+            <canvas class="chart tall" id="chart-roles" aria-label="Per robot, which intent was steering it across the MATCH"></canvas>
+            <canvas class="chart" id="chart-sources" aria-label="Per robot, FUEL taken split by NEUTRAL ZONE, own ALLIANCE ZONE and FEED outlet, with the reclaim marked past the end"></canvas>
+          </div>
+          <p class="hint" id="chart-shape-note"></p>
           <h3>Fouls — who committed them</h3>
           <p class="hint" id="foul-note"></p>
           <div class="table-wrap"><table id="foul-table"></table></div>

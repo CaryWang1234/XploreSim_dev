@@ -30,6 +30,7 @@ self.onmessage = (ev) => {
         autoWinner: recorded ? recorded.autoWinner : null,
         robotStats: recorded ? recorded.robotStats : null,
         events: recorded ? recorded.events : null,
+        hubReturned: recorded ? recorded.hubReturned : null,
         planSnapshot: payload.planSnapshot || null,
       });
       return;

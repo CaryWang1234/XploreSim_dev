@@ -496,6 +496,11 @@ export function simulateMatch(opts) {
   const fholder = new Int16Array(total).fill(-1);
   const fshooter = new Int16Array(total).fill(-1);
   const fhub = new Uint8Array(total); // flight target: 1 red hub, 2 blue hub, 3 a PASS aim point
+  // Which HUB this FUEL has already been processed by and come back out of (§5.4). Set on the way out,
+  // never cleared: a piece that has been through a HUB once has been through one, and the single-number
+  // read-out that uses it — how much of what a HUB returned the same ALLIANCE got back — only needs the
+  // yes. It is not a frame field and it spends no random number, so it cannot move a recorded MATCH.
+  const fhubout = new Uint8Array(total);
   // Whether a scored shot was launched legally: 1 = the ROBOT's BUMPERS were inside its ALLIANCE ZONE
   // (G407 / §5.4), 0 = outside, which the HUB's back net stops. Unused for a PASS or an HP throw.
   const flegal = new Uint8Array(total);
@@ -733,6 +738,16 @@ export function simulateMatch(opts) {
           // Launches that left the hopper while the ROBOT's BUMPERS were outside its own ALLIANCE ZONE
           // (§5.4 / G407). The gate refuses them, so this stays 0 and the verifier pins it there.
           outOfZoneShots: 0,
+          // #129: what the score cannot say — where the FUEL was lying when this machine took it, how much
+          // of what its own HUB handed back it got to keep, and what it spent its seconds and its inches
+          // on. All of it is bookkeeping on facts the tick already produces: no frame field, no event and
+          // no random draw is added, so `scripts/golden.mjs` still replays the digests it had before these
+          // existed. A cycle is one piece taken at the mouth, which is why there is no separate counter —
+          // `fuelCollected` already is one, and the 8 preloaded FUEL (§6.3.4-C) are not cycles.
+          collectFrom: { neutral: 0, zone: 0, feed: 0 },
+          fuelReclaimed: 0,
+          modeSec: { IDLE: 0, COLLECT: 0, STOCKPILE: 0, SCORE: 0, PASS: 0, PUSH: 0, DEFEND: 0, CLIMB: 0, FEED: 0 },
+          modeIn: { IDLE: 0, COLLECT: 0, STOCKPILE: 0, SCORE: 0, PASS: 0, PUSH: 0, DEFEND: 0, CLIMB: 0, FEED: 0 },
         },
       });
     });
@@ -823,6 +838,10 @@ export function simulateMatch(opts) {
   // over with nothing to stop it. See hubExitRate in defaultScenario() for the calibration.
   const hubExitRate = sc.hubExitRate ?? defaultScenario().hubExitRate;
   const exitAcc = { red: 0, blue: 0 };
+  // How many FUEL this HUB has handed back to the FIELD. The denominator of the reclaim read-out: a HUB
+  // that returns everything and gets nothing back is a feed for the other ALLIANCE, and the score alone
+  // cannot tell that story.
+  const hubReturned = { red: 0, blue: 0 };
 
   const log = (t, kind, data) => {
     if (events.length < 3000) events.push({ t: +t.toFixed(2), kind, ...data });
@@ -1076,6 +1095,20 @@ export function simulateMatch(opts) {
     return Math.hypot(Math.abs(along - half), Math.max(0, across - half)) <= reach;
   }
 
+  // Where a piece of FUEL was when it was taken: at the CHUTE outlet the HUMAN PLAYER dumps through
+  // (§5.9.2), inside this ROBOT's own ALLIANCE ZONE, or anywhere else on the carpet — which for this
+  // count means the NEUTRAL ZONE and the opponent's half together, because what the split prices is how
+  // far from home a machine had to work. A collector that only ever finds FUEL in the middle is spending
+  // its MATCH crossing BUMPS and TRENCHES; one that only takes it at the outlet is a feed line.
+  function fuelSourceOf(rb, x, y) {
+    for (const side of ['red', 'blue']) {
+      const d = GEO[side].dump;
+      if (Math.abs(x - d.x) <= d.w / 2 + 10 && Math.abs(y - d.y) <= d.h / 2 + 10) return 'feed';
+    }
+    const g = GEO[rb.alliance];
+    return x >= g.allianceZone[0] && x <= g.allianceZone[1] ? 'zone' : 'neutral';
+  }
+
   function takeFuelNear(rb, radius, rate, dt, mouthReach = 0) {
     // Accumulate fractionally so intakeRate is a true FUEL/s limit rather than 1 FUEL/tick.
     rb.intakeAcc = Math.min(2, (rb.intakeAcc || 0) + rate * dt);
@@ -1110,6 +1143,10 @@ export function simulateMatch(opts) {
           rb.carrying += 1;
           got += 1;
           rb.stat.fuelCollected += 1;
+          rb.stat.collectFrom[fuelSourceOf(rb, fx[i], fy[i])] += 1;
+          // Taken back out of the FIELD after this ALLIANCE's own HUB had already processed it once: the
+          // piece is on its second trip, which is what makes a HUB a feed rather than a drain.
+          if (fhubout[i] === (rb.alliance === 'red' ? 1 : 2)) rb.stat.fuelReclaimed += 1;
           if (got >= cap) {
             rb.intakeAcc -= got;
             rebuildHint();
@@ -1987,6 +2024,7 @@ export function simulateMatch(opts) {
         // it sits on a rung reads like a bug.
         rb.intent = { mode: INTENT.CLIMB, level: rb.climb.level };
         rb.stat.activeSec += tick;
+        rb.stat.modeSec[INTENT.CLIMB] += tick;
         continue;
       }
       if (rb.climb.dismountLeft > 0) {
@@ -1997,6 +2035,7 @@ export function simulateMatch(opts) {
         rb.intent = { mode: INTENT.CLIMB, level: 1 };
         if (rb.climb.dismountLeft === 0) rb.climb.attaching = false;
         rb.stat.activeSec += tick;
+        rb.stat.modeSec[INTENT.CLIMB] += tick;
         continue;
       }
       const intent = rb.intent;
@@ -2183,7 +2222,12 @@ export function simulateMatch(opts) {
       const py = rb.y;
       rb.x += rb.vx * tick;
       rb.y += rb.vy * tick;
-      rb.distance += Math.hypot(rb.x - px, rb.y - py);
+      const moved = Math.hypot(rb.x - px, rb.y - py);
+      rb.distance += moved;
+      // Inches are charged to the intent that was steering, not to where the machine finally ended up:
+      // that is the difference between "drove 96 ft" and "spent 60 ft of it going and coming back from
+      // the NEUTRAL ZONE", which is the number a driver can act on.
+      if (intent.mode) rb.stat.modeIn[intent.mode] += moved;
       obstacleResolve(rb);
       bulldoze(rb);
 
@@ -2408,6 +2452,9 @@ export function simulateMatch(opts) {
           }
       }
       rb.stat.activeSec += tick;
+      // Charged to the same `intent` the inches above were, so the seconds and the distance in each column
+      // of the effort table describe the same stretch of the MATCH.
+      if (intent.mode) rb.stat.modeSec[intent.mode] += tick;
     }
 
     // Every ROBOT is back inside the guardrails once the tick's interactions are done. The ROBOT-vs-
@@ -2514,6 +2561,8 @@ export function simulateMatch(opts) {
       fstate[i] = 0;
       fx[i] = land.x;
       fy[i] = land.y;
+      fhubout[i] = target === 'red' ? 1 : 2;
+      hubReturned[target] += 1;
       processing.delete(i);
     }
 
@@ -2615,6 +2664,9 @@ export function simulateMatch(opts) {
     autoFuel: { ...autoFuel },
     autoWinner,
     hubSchedule,
+    // FUEL each HUB handed back onto the FIELD. Divided into the reclaim each ALLIANCE got from its own
+    // robots, this is the ratio that says whether a HUB was feeding you or feeding them.
+    hubReturned: { ...hubReturned },
     events,
     timeline: record ? timeline : null,
     scenario: sc,
