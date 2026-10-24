@@ -31,76 +31,76 @@
       "name": "pinned-score-contact",
       "note": "every ROBOT held on SCORE, §7.4.4 hard contact on, so the foul path is in the digest",
       "seed": 90001,
-      "full": 3516014109,
+      "full": 2569930120,
       "cuts": [
         644888899,
-        2188757194,
-        398716054,
-        455418173,
-        3516014109
+        4037383813,
+        1581463189,
+        3297717234,
+        2569930120
       ],
       "total": {
-        "red": 653,
-        "blue": 596
+        "red": 644,
+        "blue": 593
       },
       "fuel": {
-        "red": 628,
-        "blue": 561
+        "red": 624,
+        "blue": 573
       },
       "frames": 1601,
-      "scored": 1136,
-      "collected": 1327,
-      "fouls": 2
+      "scored": 1158,
+      "collected": 1438,
+      "fouls": 0
     },
     {
       "name": "ai-vs-greedy",
       "note": "the shipped search on red, greedy on blue: MCTS, opponent model and the whole intent ladder",
       "seed": 700001,
-      "full": 2347561074,
+      "full": 918109903,
       "cuts": [
         2377009075,
         203988388,
-        3679532752,
-        3956124946,
-        2347561074
+        1164645450,
+        4123809474,
+        918109903
       ],
       "total": {
-        "red": 578,
-        "blue": 544
+        "red": 543,
+        "blue": 612
       },
       "fuel": {
-        "red": 558,
-        "blue": 434
+        "red": 523,
+        "blue": 552
       },
       "frames": 1601,
-      "scored": 951,
-      "collected": 1200,
-      "fouls": 2
+      "scored": 1030,
+      "collected": 1264,
+      "fouls": 4
     },
     {
       "name": "pinned-score-towerl1-strict",
       "note": "§6.5.2 strict: no TOWER points for LEVEL 1 in TELEOP, on the pinned all-SCORE MATCH above",
       "seed": 90001,
-      "full": 355699161,
+      "full": 3349176912,
       "cuts": [
         644888899,
-        2188757194,
-        398716054,
-        455418173,
-        355699161
+        4037383813,
+        1581463189,
+        3297717234,
+        3349176912
       ],
       "total": {
-        "red": 633,
-        "blue": 576
+        "red": 624,
+        "blue": 573
       },
       "fuel": {
-        "red": 628,
-        "blue": 561
+        "red": 624,
+        "blue": 573
       },
       "frames": 1601,
-      "scored": 1136,
-      "collected": 1327,
-      "fouls": 2
+      "scored": 1158,
+      "collected": 1438,
+      "fouls": 0
     }
   ]
 }

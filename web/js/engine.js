@@ -31,6 +31,21 @@ const capability = (rb) => Math.min(rb.health, rb.impairLeft > 0 ? rb.impairFact
 // `passRangeIn` (model.js), because a 4.5-ball-wide shooter and a rookie's belt do not throw the same
 // distance.
 const PASS_FLIGHT_SEC = 1.1;
+// Nobody throws a ball 400 in onto a plate, so a PASS comes down this far off its aim point, as a
+// fraction of the distance actually thrown. The draw is made when the FUEL leaves the mechanism, not
+// when it lands, so the ball flies to the point it rests on and the stream the replay draws ends there
+// instead of at an aim point the piece then jumps off. It does not make the track curve: a flight in this
+// model has no height axis and integrates at constant velocity, so a throw's ground track is a straight
+// chord — which is also what a lob looks like from directly above. Cross-axis takes the whole fraction and
+// along the line half of it, because the error of a fixed-force launcher is mostly sideways, and a pass 20%
+// short still reaches a partner while one 20% wide does not. Measured over 30,669 releases: a median 2.0 in
+// off the aim on the 44 in hop this policy mostly throws, a median 26.7 in on a 400 in one; the ceiling of
+// the draw is hypot(12%, 6%) = 13.4% of the throw.
+// `sc.passSpreadFrac = 0` removes the scatter. `sc.passScatterAt = 'resolve'` restores the build that
+// flew the aimed line and displaced the rest point afterwards, which is the control the continuity guard
+// needs: on the shipped order the drawn stream and the landing are the same point by construction, so
+// only the earlier build can demonstrate that the guard is looking at passes at all.
+const PASS_SPREAD_FRAC = 0.12;
 // A PASS aim point has to clear the HUB box, because FUEL has to land on the FIELD: the point of the
 // check is physical, not anti-exploit. A pass cannot score by construction — resolveFlight awards
 // nothing for fhub === 3 — and FUEL dropped at a HUB mouth is self-limiting anyway, because loitering
@@ -1615,26 +1630,24 @@ export function simulateMatch(opts) {
 
   // Where a PASS aimed at (tx, ty) actually comes down if a HUB stands in the line. Detection uses the
   // footprint grown by one FUEL radius (PASS_HUB_HALF_IN), because what has to miss the structure is a
-  // 5.91 in ball and not a point; the stop point is then pulled back out of the true footprint by at
-  // least that radius, so the ball's centre ends clear of the wall it hit. Null when the line is clear.
+  // 5.91 in ball and not a point; the stand-off is measured from where the ball's BODY first touches that
+  // footprint, so the resting centre is clear of the wall by the drop and the placement code has nothing
+  // left to expel. Measuring it from the true face instead — which is what this line used to do — left the
+  // centre up to a ball radius inside the grown box, and expelFromSolid then shoved the piece out along
+  // whichever axis was shortest: on a throw clipped at a HUB corner that is tens of inches off the line the
+  // replay had just drawn. Null when the line is clear.
   function passStop(rb, tx, ty) {
     const vx = tx - rb.x;
     const vy = ty - rb.y;
     const len = Math.hypot(vx, vy);
     if (len <= 0) return null;
-    const face = FIELD.hub.sizeIn / 2;
-    const ball = PASS_HUB_HALF_IN - face;
     let best = null;
     let bestAt = Infinity;
     for (const side of ['red', 'blue']) {
       const h = GEO[side].hub;
       const grazed = segmentBoxEntry(rb.x, rb.y, tx, ty, h.x, h.y, PASS_HUB_HALF_IN);
       if (grazed === null) continue;
-      // Where the centre would reach the wall itself. A line that only clips the corner — the ball's
-      // body hits, the centre does not — is stopped at the same stand-off, because a 5.91 in ball
-      // cannot pass a three-inch gap.
-      const hit = segmentBoxEntry(rb.x, rb.y, tx, ty, h.x, h.y, face);
-      const back = Math.max(0, (hit === null ? grazed : hit) * len - (ball + rng.range(NET_DROP_NEAR_IN, NET_DROP_FAR_IN)));
+      const back = Math.max(0, grazed * len - rng.range(NET_DROP_NEAR_IN, NET_DROP_FAR_IN));
       if (back < bestAt) {
         bestAt = back;
         best = { x: rb.x + (vx / len) * back, y: rb.y + (vy / len) * back };
@@ -1665,21 +1678,45 @@ export function simulateMatch(opts) {
     // own" — the zones' front edges are 334 in apart and their middle lines 493 in (§5.2/§5.3), so the
     // play needs the reach, and a ROBOT without it has to drive home or find a partner who is nearer.
     // The HUB then limits it a second way: a throw at a teammate standing behind one never gets there.
+    // The scatter is drawn before the HUB gets a say, because it belongs to the throw: the line that is
+    // then stopped at a face is the line the replay draws, so a pass clipped by the structure comes down
+    // where it was seen going, on whichever side of it the ball was headed.
+    const frac = sc.passSpreadFrac ?? PASS_SPREAD_FRAC;
+    if (frac > 0 && (sc.passScatterAt ?? 'launch') === 'launch') {
+      const lx = ax - rb.x;
+      const ly = ay - rb.y;
+      const ll = Math.hypot(lx, ly);
+      if (ll > 0) {
+        const wide = rng.range(-frac * ll, frac * ll);
+        const long = rng.range(-frac * ll * 0.5, frac * ll * 0.5);
+        ax = clamp(ax + (lx / ll) * long - (ly / ll) * wide, 8, GEO.L - 8);
+        ay = clamp(ay + (ly / ll) * long + (lx / ll) * wide, 8, GEO.W - 8);
+      }
+    }
     const stop = passStop(rb, ax, ay);
     if (stop) {
       ax = stop.x;
       ay = stop.y;
     }
-    const ex = ax - rb.x;
-    const ey = ay - rb.y;
+    // A landing point that still sits on a structure — a TOWER, since the HUBs were just dealt with — is
+    // pulled back along the throw's own line here, at release. Left to placeLoose() to expel at
+    // resolution, the piece came down on whichever axis of the structure happened to be shortest, which
+    // put the rest point twenty inches off the line the replay had just drawn.
+    const clear = pullBackAlongLane(ax, ay, ax - rb.x, ay - rb.y, FUEL_RADIUS_IN);
+    const ex = clear.x - rb.x;
+    const ey = clear.y - rb.y;
     for (let i = 0; i < total; i++) {
       if (fstate[i] === 3 && fholder[i] === rb.idx) {
         fstate[i] = 4;
         fholder[i] = -1;
         fshooter[i] = rb.idx;
         fhub[i] = 3;
-        fpx[i] = ax;
-        fpy[i] = ay;
+        // A PASS has no scoring outcome, and the block rule that consults `fscore` only lets a launch
+        // over a structure through a DEFENDER when that launch was going in. Left at whatever the slot's
+        // previous shot set, a pass would fly straight through a car parked at the HUB.
+        fscore[i] = 0;
+        fpx[i] = clear.x;
+        fpy[i] = clear.y;
         ftimer[i] = PASS_FLIGHT_SEC;
         fvx[i] = ex / PASS_FLIGHT_SEC;
         fvy[i] = ey / PASS_FLIGHT_SEC;
@@ -1878,11 +1915,23 @@ export function simulateMatch(opts) {
   function resolveFlight(i, t) {
     flights.delete(i);
     if (fhub[i] === 3) {
-      // A PASS is a launch that is not aimed at a HUB, so it scores nothing: the FUEL simply comes
-      // down near the aim point as loose FUEL for a partner. The landing spreads with the length of
-      // the pass, because nobody throws a ball 400 in onto a plate.
-      const spread = 0.12 * Math.hypot(fpx[i] - fx[i], fpy[i] - fy[i]);
-      const land = placeLoose(i, fpx[i] + rng.range(-spread, spread), fpy[i] + rng.range(-spread, spread));
+      // A PASS is a launch that is not aimed at a HUB, so it scores nothing: the FUEL comes down where it
+      // was seen going. The scatter is drawn at release (releasePass), which is what lets the stream the
+      // replay traced end at the resting piece instead of at an aim point the ball then jumps off. The
+      // 'resolve' arm is the earlier order — flight to the aim point, then a displacement — kept because it
+      // is the only way the continuity guard can be shown to be reading passes at all.
+      const frac = sc.passSpreadFrac ?? PASS_SPREAD_FRAC;
+      let land;
+      if ((sc.passScatterAt ?? 'launch') === 'resolve') {
+        // The same magnitude, drawn after the flight instead of before it. The length flown is read back
+        // from the ball's own velocity and fuse, because the gap between the last integrated position and
+        // the aim point is nothing once a flight spans a whole number of ticks — which is how the old
+        // version of this line, which used that gap, threw away the 12% it promised.
+        const spread = frac * Math.hypot(fvx[i], fvy[i]) * PASS_FLIGHT_SEC;
+        land = placeLoose(i, fpx[i] + rng.range(-spread, spread), fpy[i] + rng.range(-spread, spread));
+      } else {
+        land = placeLoose(i, fpx[i], fpy[i]);
+      }
       fstate[i] = 0;
       fx[i] = land.x;
       fy[i] = land.y;

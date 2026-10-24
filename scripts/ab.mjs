@@ -71,6 +71,12 @@ const PHYS = {
   // Restores a ROBOT standing at a HUB taking a shot that was flying over the prism into the opening,
   // which is 72 in above the FIELD (§5.4) and therefore above any bumper on the carpet.
   noOpeningHeight: { blockAboveOpening: 0 },
+  // Restores the throw that flies to its aim point and is displaced afterwards. That is the control for
+  // sampling the PASS scatter at release, and it prices the one part of the pass the replay could see: a
+  // ball that comes down off the line it was drawn on has to be run back for a partner to get.
+  latePassScatter: { passScatterAt: 'resolve' },
+  // Removes the landing scatter from a PASS altogether: the ball comes down exactly where it was aimed.
+  noPassScatter: { passSpreadFrac: 0 },
   noSeamLock: { seamLock: false },
   physAllOff: { turretOpportunityMarginIn: 0, contactRestitution: -1, dumperFaceTolDeg: 180 },
 };

@@ -35,7 +35,7 @@ Every number the site states is reproducible from a committed script:
 | `npm run ab` | the AI against a named baseline over disjoint seed families; `ARMS=`, `SEAT=`, `N=`, `FAMILIES=`, `SWEEP=`, `PHYS=`, `EFFS=`, `PREPS=`, `DUMPS=` expand arms |
 | `npm run seat` | decomposes a same-roster mirror into collected / scored / wasted / blocked per ALLIANCE, under each `autoWinner` |
 | `npm run lever` | what DRIVER, chassis, mechanism, intake face and a benched ROBOT are worth |
-| `npm run knob` | one engine scenario knob at a time on the greedy mirror (`KNOB=`, `VALS=`, `EXTRA=`, `N=`) — the harness every "the anchor would move by X" figure is read with |
+| `npm run knob` | one engine scenario knob at a time on the greedy mirror (`KNOB=`, `VALS=`, `EXTRA=`, `N=`) — the harness every "the anchor would move by X" figure is read with. It cannot price anything that only happens on a PASS: the cycling baseline never throws, so a throw knob reads identical at every value and `npm run ab` is the tool that has a price for it |
 | `npm run probe` | throughput: FUEL/s, loose-FUEL density, intake tick share |
 | `npm run dark` | how the inactive window was spent, and how many shots went into a dead HUB |
 | `npm run gap` | collected vs scored vs wasted vs distance, by DRIVER level |
@@ -282,13 +282,13 @@ The rules this repo has learned the hard way, all of them from a figure that tur
 
 Stated on the page too, because a planner is used to make decisions:
 
-- AUTO scoring is low: the engine puts ≈85 FUEL in during AUTO (95.4 red, 74.5 blue over 12 MATCHes,
+- AUTO scoring is low: the engine puts ≈89 FUEL in during AUTO (105.2 red, 72.8 blue over 12 MATCHes,
   and `autoWinner: 'auto'` resolves that from the simulation, so a 12-MATCH probe does not split it
   evenly) where real Einstein Finals alliances managed 111-177. The fix for a specific team is the
   card's **AUTO FUEL scored** box, which replaces those 20 seconds with the measurement instead of the
   model — see "A declared AUTO". It is not a fix for the anchor: the shipped cards declare nothing, so
   this gap is still what the calibration is measured against.
-- TELEOP throughput is high: 5.01 FUEL/s per alliance against ≈4.7 in the real finals.
+- TELEOP throughput is high: 5.02 FUEL/s per alliance against ≈4.7 in the real finals.
 - The YELLOW/RED CARD ladder is enforceable now, and it is not switched on. §6.6.1 says yellows are
   additive and a RED disqualifies the team for the MATCH, so `sc.cardLadder` (Setup → "Enforce the card
   ladder") takes the machine that earned the second one out of the rest of the MATCH. `npm run cards`
@@ -314,8 +314,8 @@ Real 2026 Einstein Finals data from The Blue Alliance (event `2026cmptx`): allia
 842. The greedy same-roster mirror is 562.7 (562.1 and 563.4 across the two seed sets, the trio
 254/1678/1690 on both ALLIANCES), 10.3% under that average; the other trio, 4414/5940/11019, reads 534.0 on
 the same MATCHes, which is the roster and not the seat. Against the hand-written greedy cycling baseline, on
-identical ROBOTs, the search wins 74.3% of MATCHes (n=96, 24 per family over four disjoint seed families)
-with a margin of +43.9 and a score of 666.6 against 622.7.
+identical ROBOTs, the search wins 70.3% of MATCHes (n=96, 24 per family over four disjoint seed families)
+with a margin of +39.6 and a score of 656.6 against 617.0.
 
 The anchor sits 10.3% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
 back. Six model changes put it there, and the last four are read with `npm run knob`, which averages both
@@ -323,7 +323,7 @@ rosters and therefore sits about 16 points under the anchor's own scale. The BUM
 (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP, so the two lanes inside a band meet at one seam and nothing
 connects them) took about 16 points off the whole outlet-cap curve. Giving a launch a dispersion reads −17.2
 on that sweep (aiming every shot at the centre is worth 563.4 against the 546.2 the 22 in that ships gives)
-and costs 6.4 win points AGAINST the search, because a fan of loose FUEL around the HUB helps the machine
+and costs 12.0 win points AGAINST the search, because a fan of loose FUEL around the HUB helps the machine
 that only cycles more than the one that plans. The first version of that fan clamped every launch out to the
 HUB's 47 in square footprint, which is outside the 20.85 in opening it was supposed to be aiming at;
 limiting that clamp to misses cost a further 1.7 points between builds (593.4 → 591.7) and is what
@@ -341,6 +341,19 @@ stops now comes down at the bumper that took it rather than a tick further on, w
 tick used to carry the FUEL inside the prism and the placement code expelled it out the shortest face,
 sometimes the far one, so on the naive mirror 59 of 173 stopped launches were drawn arriving on one side of
 a HUB and lying on the carpet 25 in past the other.
+A PASS now scatters as it is released rather than as it lands. The comment on that branch promised a landing
+that "spreads with the length of the pass" — 12% of the distance — and the line under it drew the scatter on
+the leftover between the last integrated position and the aim point, which for an 1.1 s throw spanning eleven
+whole ticks is about nothing: 1.75% of the throw, measured over 18,100 of them. The draw is now made when the
+FUEL leaves the mechanism, so the flight integrates to the point the piece rests on, and that lets
+`scripts/verify.mjs` hold a throw to the same continuity bound it holds a shot to — throws used to be dropped
+from that walk by a `tgt === 3` in the reader, which is how the dead scatter survived: 8,718 landings with 0
+outside, and 170 of 5,249 outside when the same size scatter is drawn at the end instead. The change costs
+the anchor nothing, because the cycling baseline never passes (the greedy mirror replays bit-for-bit
+identical, which `npm run golden` reports as an unchanged digest) and 9.5 points of the search's own score
+against it. A throw's ground track is still a straight chord: the model carries no height in a flight, and a
+lob seen from directly above is a straight chord too. Making a pass look like a lob is a drawing job — the
+airborne radius swelling, a ground shadow shortening as the fuse runs out — not a physics one.
 Re-swept on this build, `hubExitRate` 4.2 → 546.2, 4.6 → 559.9,
 5.0 → 568.1, 5.2 → 578.3 at 192 alliance scores per point, with the red-blue split inside about one
 standard error everywhere: the whole curve moved down by the exit's dwell and the narrowed band and kept its

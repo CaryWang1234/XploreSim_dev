@@ -476,10 +476,16 @@ function passHubWalk(res) {
   const hubs = [GEO.red.hub, GEO.blue.hub];
   const last = new Map();
   const origin = new Map();
+  // The chord from a flight's first frame to wherever its ball next appears is only the path if the ball
+  // came down where it was last drawn. It does not always: a throw clipped by a HUB used to be expelled
+  // out of the structure's shortest axis, and the chord from the launch to that resting point misses the
+  // part of the line that went inside. So every pair of consecutive in-flight frames is tested as well.
+  const airborne = new Map();
   let passSeen = 0;
   let shotSeen = 0;
   let passAimedThrough = 0;
   let passCross = 0;
+  let passFrameCross = 0;
   let shotCross = 0;
   let restInside = 0;
   for (const f of res.timeline) {
@@ -494,19 +500,33 @@ function passHubWalk(res) {
         // Element 6 is the launcher's index, which is whose aim line this flight is.
         const side = sideOf.get(b[6]);
         origin.set(id, { x: b[1], y: b[2], pass, aimed: pass && side ? PASS_TEST_FAR(side) : null });
+        airborne.set(id, pass ? 0 : -1);
         if (pass) passSeen += 1;
         else shotSeen += 1;
+      } else if (b[3] === 4 && airborne.has(id)) {
+        if (airborne.get(id) >= 0 && hubs.some((h) => segmentBoxEntry(p[1], p[2], b[1], b[2], h.x, h.y, half) !== null)) {
+          airborne.set(id, airborne.get(id) + 1);
+        }
       }
       if (p && p[3] === 4 && b[3] !== 4) {
         const o = origin.get(id);
+        const frames = airborne.get(id);
         origin.delete(id);
+        airborne.delete(id);
         if (!o) continue;
-        const crossed = hubs.some((h) => segmentBoxEntry(o.x, o.y, b[1], b[2], h.x, h.y, half) !== null);
+        // The chord covers every drawn segment but the last one — a flight is drawn until it leaves the
+        // air, and the piece is then sighted again at wherever it came to rest. A 5.91 in ball standing
+        // just clear of a 47 in prism is inside the shrunk footprint's corner, so that final step is the
+        // one the chord has to read. (p is the record row: [id, x, y, state, ...], so its position is
+        // p[1], p[2] and not the first two elements.)
+        const crossed = hubs.some((h) => segmentBoxEntry(o.x, o.y, b[1], b[2], h.x, h.y, half) !== null)
+          || hubs.some((h) => segmentBoxEntry(p[1], p[2], b[1], b[2], h.x, h.y, half) !== null);
         if (o.pass) {
           if (o.aimed && hubs.some((h) => segmentBoxEntry(o.x, o.y, o.aimed.x, o.aimed.y, h.x, h.y, half) !== null)) {
             passAimedThrough += 1;
           }
           if (crossed) passCross += 1;
+          if (frames > 0) passFrameCross += 1;
           if (hubs.some((h) => Math.abs(b[1] - h.x) <= edge && Math.abs(b[2] - h.y) <= edge)) restInside += 1;
         } else if (crossed) shotCross += 1;
       }
@@ -519,20 +539,28 @@ function passHubWalk(res) {
     for (const [id, p] of last) {
       if (p[3] !== 4 || now.has(id)) continue;
       const o = origin.get(id);
+      const frames = airborne.get(id);
       origin.delete(id);
+      airborne.delete(id);
       if (!o) continue;
       const crossed = hubs.some((h) => segmentBoxEntry(o.x, o.y, p[1], p[2], h.x, h.y, half) !== null);
-      if (o.pass) { if (crossed) passCross += 1; } else if (crossed) shotCross += 1;
+      if (o.pass) {
+        if (crossed) passCross += 1;
+        if (frames > 0) passFrameCross += 1;
+      } else if (crossed) shotCross += 1;
     }
     last.clear();
     for (const [id, b] of now) last.set(id, b);
   }
-  return { passSeen, shotSeen, passAimedThrough, passCross, shotCross, restInside };
+  return { passSeen, shotSeen, passAimedThrough, passCross, passFrameCross, shotCross, restInside };
 }
 
-function passHubRun(seed, shoot) {
+// A policy that throws as soon as its hands are full, at a fixed far point of the FIELD, and does nothing
+// else. The §5.4 PASS walk needs it, and so does the throw half of the continuity walk: the greedy reference
+// policy never passes, so a guard written against it reads no throws at all.
+function throwingPolicyFactory() {
   const far = PASS_TEST_FAR;
-  const mk = (side) => {
+  return (side, shoot) => {
     const zone = GEO[side].allianceZone;
     // The shooting arm has to fire from inside its own ALLIANCE ZONE or G407 refuses the launch, so it
     // picks up the nearest FUEL on its own half and ignores the rest of the FIELD.
@@ -564,12 +592,16 @@ function passHubRun(seed, shoot) {
       human: () => 'HOLD',
     };
   };
+}
+
+function passHubRun(seed, shoot) {
+  const mk = throwingPolicyFactory();
   const prof = SAMPLES.slice(0, 3);
   return simulateMatch({
     redAlliance: makeAlliance(prof, 'red'),
     blueAlliance: makeAlliance(prof, 'blue'),
-    redPolicy: mk('red'),
-    bluePolicy: mk('blue'),
+    redPolicy: mk('red', shoot),
+    bluePolicy: mk('blue', shoot),
     scenario: { ...defaultScenario(), seed, autoWinner: 'auto' },
     record: true,
   });
@@ -581,17 +613,17 @@ function passHubChecks(seed) {
   if (thrown.passSeen < 20) {
     throw new Error(`the PASS check only saw ${thrown.passSeen} PASSes thrown, so it is not exercising the throw path`);
   }
-  if (thrown.passAimedThrough < thrown.passSeen * 0.5) {
-    throw new Error(`the PASS check aimed only ${thrown.passAimedThrough} of ${thrown.passSeen} throws through a HUB, so most of its "0 crossings" are throws that never tested the net`);
+  if (thrown.passAimedThrough < 200) {
+    throw new Error(`the PASS check aimed only ${thrown.passAimedThrough} of ${thrown.passSeen} throws through a HUB, so its "0 crossings" are mostly throws that never tested the net`);
   }
   if (fired.shotCross <= 0) {
     throw new Error(`the control arm had ${fired.shotSeen} shots and none of them registered as a HUB crossing (${fired.shotCross}), so the detector is blind and the PASS result below means nothing`);
   }
-  if (thrown.passCross > 0 || thrown.restInside > 0) {
-    throw new Error(`§5.4 net: ${thrown.passCross} of ${thrown.passSeen} PASSes flew through a HUB and ${thrown.restInside} came to rest inside one`);
+  if (thrown.passCross > 0 || thrown.passFrameCross > 0 || thrown.restInside > 0) {
+    throw new Error(`§5.4 net: ${thrown.passCross} of ${thrown.passSeen} PASS chords and ${thrown.passFrameCross} drawn flight paths went into a HUB, and ${thrown.restInside} came to rest inside one`);
   }
   console.log('--- §5.4 net seen from a PASS (aimed straight through both HUBs) ---');
-  console.log(`  PASSes thrown ${thrown.passSeen}  aimed through a HUB ${thrown.passAimedThrough}  flew through one ${thrown.passCross}  came to rest inside one ${thrown.restInside}`);
+  console.log(`  PASSes thrown ${thrown.passSeen} (${(100 * thrown.passAimedThrough / thrown.passSeen).toFixed(0)}% aimed through a HUB = ${thrown.passAimedThrough})  chord into a HUB ${thrown.passCross}  drawn path into a HUB ${thrown.passFrameCross}  came to rest inside one ${thrown.restInside}`);
   console.log(`  control: ${fired.shotSeen} shots fired at their own HUB, ${fired.shotCross} of them registered as a HUB crossing, so the walk is not blind`);
 }
 
@@ -701,25 +733,37 @@ const AIM_TOL_IN = 3;
 // picked out by a short gap between the last in-flight frame and the first loose one. The control is
 // sc.netMiss = false, the pre-fix drop, which must put balls out past that face or the check is not
 // measuring anything.
-function missLandingRun(seed, netMiss, spread, extra) {
+function missLandingRun(seed, netMiss, spread, extra, walk) {
   const face = { red: GEO.red.hub.x + FIELD.hub.sizeIn / 2, blue: GEO.blue.hub.x - FIELD.hub.sizeIn / 2 };
   let landings = 0;
   let pastFace = 0;
   let worst = -Infinity;
   let oneFrame = 0;
+  let passN = 0;
+  let passBad = 0;
+  let passWorst = 0;
   const jumps = [];
-  for (const f of flightWalk(seed, { netMiss, spread, extra })) {
+  for (const f of flightWalk(seed, { netMiss, spread, extra, ...(walk || {}) })) {
     // A HUB exit waits out processingSec before the FUEL reappears, so a landing is told from an exit by
     // a short gap between the last in-flight frame and the first loose one.
     if (f.outcome !== 'loose' || f.gap > 6) continue;
     landings += 1;
-    const past = f.tgt === 1 ? f.rest[0] - face.red : face.blue - f.rest[0];
-    if (past > MISS_PAST_LIMIT_IN) pastFace += 1;
-    if (past > worst) worst = past;
+    // "Past the HUB's far face" is a statement about a launch aimed at a HUB; a PASS is aimed at a
+    // teammate, so it joins the continuity walk without joining the net count.
+    if (f.tgt === 3) {
+      passN += 1;
+      const over = f.jump - (1.5 * f.step + 8);
+      if (f.n > 1 && over > 0) passBad += 1;
+      if (f.n > 1 && over > passWorst) passWorst = over;
+    } else {
+      const past = f.tgt === 1 ? f.rest[0] - face.red : face.blue - f.rest[0];
+      if (past > MISS_PAST_LIMIT_IN) pastFace += 1;
+      if (past > worst) worst = past;
+    }
     if (f.n > 1) jumps.push({ jump: f.jump, step: f.step });
     else oneFrame += 1;
   }
-  return { landings, pastFace, worst, jumps, oneFrame };
+  return { landings, pastFace, worst, jumps, oneFrame, passN, passBad, passWorst };
 }
 
 function missLandingChecks(seed) {
@@ -747,7 +791,9 @@ function missLandingChecks(seed) {
 // last frame the ball was seen in the air, the point that line was heading for, and what became of it:
 // `in` (the ball left the field, because a scored FUEL is inside the HUB and not drawn), or `loose` with
 // the place it came to rest. `shotSpreadIn` switches the dispersion off, which restores the
-// aimed-at-centre flight and the independently drawn drop.
+// aimed-at-centre flight and the independently drawn drop. PASS flights (target 3) are left out unless
+// `keepPasses` is set, because most of what reads this walk judges a landing against a HUB and a throw
+// toward a teammate has no HUB to be judged against.
 function flightWalk(seed, opt = {}) {
   const scenario = {
     ...defaultScenario(),
@@ -757,11 +803,12 @@ function flightWalk(seed, opt = {}) {
     ...(opt.spread === undefined ? {} : { shotSpreadIn: opt.spread }),
     ...(opt.extra || {}),
   };
+  const mkPolicy = opt.throwing ? throwingPolicyFactory() : (side) => naivePolicy(side);
   const res = simulateMatch({
     redAlliance: makeAlliance(SAMPLES.slice(0, 3), 'red'),
     blueAlliance: makeAlliance(SAMPLES.slice(0, 3), 'blue'),
-    redPolicy: naivePolicy('red'),
-    bluePolicy: naivePolicy('blue'),
+    redPolicy: mkPolicy('red'),
+    bluePolicy: mkPolicy('blue'),
     scenario,
     record: true,
   });
@@ -801,7 +848,8 @@ function flightWalk(seed, opt = {}) {
   for (const r of done) {
     // A ball caught airborne at the buzzer "lands" on its aim point from wherever the clock stopped it,
     // which is a truncation rather than a statement about where a launch goes, so it is not a landing.
-    if (r.t >= endT || r.tgt === 3) continue;
+    if (r.t >= endT) continue;
+    if (r.tgt === 3 && !opt.keepPasses) continue;
     const n = r.pts.length;
     const [x0, y0] = r.pts[0];
     const [xl, yl] = r.pts[n - 1];
@@ -815,6 +863,15 @@ function flightWalk(seed, opt = {}) {
       const b = frames[k].fuel.find((e) => e[0] === r.id);
       if (!b) continue;
       if (b[3] === 4) { outcome = null; break; }
+      // The record draws a FUEL only while it is loose or airborne, so a piece that is missing from the
+      // frame straight after its flight and turns up loose a few frames later was HELD in between: that
+      // second position is wherever a robot put it down, not where the launch came down. Only the frame
+      // immediately after the last flight frame can say anything about the landing.
+      if (k - k0 > 1) { outcome = null; break; }
+      // And a ball that still had fuse to run when the clock stopped came down on the last frame because
+      // the MATCH ended, which is the same truncation the `r.t >= endT` filter above refuses, one frame
+      // earlier. A PASS carries eleven ticks of it, so a great many throws are affected.
+      if (k >= frames.length - 1 && (r.tl || 0) > tickSec * 1.05) { outcome = null; break; }
       outcome = 'loose';
       rest = [b[1], b[2]];
       gap = k - k0;
@@ -828,7 +885,7 @@ function flightWalk(seed, opt = {}) {
     out.push({
       n,
       tgt: r.tgt,
-      hub: r.tgt === 1 ? GEO.red.hub : GEO.blue.hub,
+      hub: r.tgt === 1 ? GEO.red.hub : r.tgt === 2 ? GEO.blue.hub : null,
       step: Math.hypot(sx, sy),
       gap,
       outcome,
@@ -857,17 +914,28 @@ function flightWalk(seed, opt = {}) {
 // = 0 with sc.blockAboveOpening = 0, which restores the blocked landing that was left a tick past the
 // bumper and expelled out of whichever structure contained it; it has to break the bound too, because a
 // fan of 22 in on a free carpet is not the only way a FUEL can end up somewhere the replay did not draw.
+// A PASS is now held to the same bound. It used to be left out of the walk, which is how its landing
+// scatter — drawn on the leftover between the last integrated position and the aim point, and therefore
+// always nothing, since a 1.1 s throw spans eleven whole ticks — survived for as long as it did. Its
+// control is sc.passScatterAt = 'resolve', the same size scatter sampled after the flight instead of
+// before it, and it must break the bound too.
 function dispersionChecks(seed) {
-  const run = (spread, extra) => {
+  const run = (spread, extra, walk) => {
     const jumps = [];
     let skipped = 0;
+    let passN = 0;
+    let passBad = 0;
+    let passWorst = 0;
     for (const s of [seed, seed + 29]) {
-      const r = missLandingRun(s, undefined, spread, extra);
+      const r = missLandingRun(s, undefined, spread, extra, walk);
       jumps.push(...r.jumps);
       skipped += r.oneFrame;
+      passN += r.passN;
+      passBad += r.passBad;
+      if (r.passWorst > passWorst) passWorst = r.passWorst;
     }
     const bound = (r) => r.jump > 1.5 * r.step + 8;
-    return { n: jumps.length, bad: jumps.filter(bound).length, worst: Math.max(0, ...jumps.map((r) => r.jump - 1.5 * r.step)), skipped };
+    return { n: jumps.length, bad: jumps.filter(bound).length, worst: Math.max(0, ...jumps.map((r) => r.jump - 1.5 * r.step)), skipped, passN, passBad, passWorst };
   };
   const on = run(undefined);
   const off = run(0);
@@ -877,19 +945,44 @@ function dispersionChecks(seed) {
   // face, sometimes the far one. With both rules off this same walk breaks the bound, so the bound is
   // reading the stop point and not only the spread.
   const blocked = run(undefined, { blockStopAtBumper: 0, blockAboveOpening: 0 });
+  // A PASS has its own walk, on a policy that actually throws: the reference policy above shoots at its own
+  // HUB and has never passed in its life, which is how the throw came to be left out of this guard by a
+  // `tgt === 3` in the reader rather than by anything anyone decided. The control is the earlier order — fly
+  // to the aim point, then displace the rest point. Because a 1.1 s throw spans eleven whole ticks, the
+  // leftover that older draw was made on was about nothing, which is the other reason nobody noticed: the
+  // guard was blind and the bug was silent. Sampled at its promised size after the flight, it has to break
+  // the bound. The second throw control takes the scatter out altogether and must not break it, so the
+  // bound is shown to be reading the landing and not merely the crowd the ball comes down into.
+  const throwWalk = { keepPasses: true, throwing: true };
+  const passOn = run(undefined, undefined, throwWalk);
+  const passLate = run(undefined, { passScatterAt: 'resolve' }, throwWalk);
+  const passNone = run(undefined, { passSpreadFrac: 0 }, throwWalk);
   if (on.n < 20) throw new Error(`only ${on.n} shot landings recorded, so the continuity check has nothing to measure`);
+  if (passOn.passN < 20) throw new Error(`only ${passOn.passN} PASS landings recorded, so the continuity check is not reading throws at all`);
   if (on.skipped > on.n) throw new Error(`${on.skipped} of ${on.n + on.skipped} landings were single-frame flights, so the bound is being tested against a minority of them`);
   if (on.bad > 0) throw new Error(`${on.bad} of ${on.n} missed shots came to rest more than a step and a ball width from where the replay last saw them flying (worst ${on.worst.toFixed(1)} in past the bound)`);
+  if (passOn.passBad > 0) {
+    throw new Error(`${passOn.passBad} of ${passOn.passN} PASSes came to rest more than a step and a ball width from where the replay last saw them flying (worst ${passOn.passWorst.toFixed(1)} in past the bound)`);
+  }
   if (off.bad === 0) {
     throw new Error('the no-dispersion control broke the continuity bound zero times, so the walk is not measuring the teleport it is meant to catch');
   }
   if (blocked.bad === 0) {
     throw new Error('the old blocked-flight control broke the continuity bound zero times, so the bound is not reading where a stopped FUEL comes to rest');
   }
+  if (passLate.passBad === 0) {
+    throw new Error('the late-pass-scatter control broke the continuity bound zero times, so the throw walk is not looking at where a PASS comes down');
+  }
+  if (passNone.passBad > 0) {
+    throw new Error(`the no-scatter throw control put ${passNone.passBad} of ${passNone.passN} PASSes outside the bound, so something other than a landing is drawing a throw off its line`);
+  }
   console.log('--- a launch lands where it was drawn going (last flight frame to rest, bound 1.5 steps + 8 in) ---');
   console.log(`  dispersion on  landings ${on.n} (plus ${on.skipped} blocked in their first tick)  outside the bound ${on.bad}  worst overshoot ${on.worst.toFixed(1)} in`);
+  console.log(`  PASSes, on a policy that throws: ${passOn.passN} landings, outside the bound ${passOn.passBad}, worst overshoot ${passOn.passWorst.toFixed(1)} in`);
   console.log(`  control, spread 0: outside the bound ${off.bad} of ${off.n} landings, worst ${off.worst.toFixed(1)} in, so the walk is not blind`);
   console.log(`  control, blocked shot left where the tick put it: outside the bound ${blocked.bad} of ${blocked.n} landings, worst ${blocked.worst.toFixed(1)} in`);
+  console.log(`  control, throw scatter drawn at resolution: outside the bound ${passLate.passBad} of ${passLate.passN} landings, worst ${passLate.passWorst.toFixed(1)} in past`);
+  console.log(`  control, no throw scatter at all: outside the bound ${passNone.passBad} of ${passNone.passN} landings, worst ${passNone.passWorst.toFixed(1)} in`);
 }
 
 // A fan has to open in two different places at once: a made shot goes into the 41.7 in opening (§5.4), a
