@@ -169,6 +169,31 @@ const SHOT_SPREAD_IN = 22; // swept on the greedy mirror at 192 MATCHes per poin
 const SHOT_MISS_DRIFT_RAD = 0.9; // ~51 deg either side of the incoming bearing: a miss stays on the half
                                  // of the HUB the shooter was looking at, which is what a solid prism with
                                  // the opening on top and a net at its back implies
+// §5.4: "HUBS have a series of exits at the base of the HUB facing towards the NEUTRAL ZONE. FUEL
+// processed through the HUB are distributed into the NEUTRAL ZONE via one of four exits". A returned
+// piece therefore LEAVES the structure at one of four mouths and travels out onto the FIELD; it does not
+// appear at where it ends up. The four mouths sit at the quarter-centres of the 47 in base face, which is
+// 11.75 in apart — enough room for a 5.91 in FUEL between two of them (Figure 5-8 shows them across that
+// face, it does not dimension them). The manual gives no exit speed, so the roll is a constant carpet
+// deceleration and the speed at the mouth is whatever it takes to stop exactly on the point the release
+// sampled: 20 in/s² is about 0.5 m/s² of rolling friction for a foam ball on carpet, which leaves a median
+// piece about 90 in of carpet to cross, so it comes out of a mouth at roughly 60 in/s — 5 ft/s, 6 in per
+// drawn frame — and the replay shows it settling 2.7 s after it is first seen (90th percentile 3.5 s; a
+// little under the 3.0 s the geometry gives, because some are collected before they stop). 40 in/s² was
+// the alternative and it is what made the exit read as a launch: the same median piece left at 85 in/s,
+// 8.5 in a frame. The speed is nearly free — on the two-roster greedy sweep (192 alliance scores per
+// point) 4 in/s² reads 540.6, 12 → 542.6, 20 → 546.2, 120 → 554.3, all within about a standard error of
+// each other — so it is set by what a ball does on carpet and not by the anchor. Which mouth a piece uses
+// is the one nearest the point it is headed for, picked from the geometry rather than from the random
+// stream, so the release spends the same two draws it always did and a recorded MATCH still replays the
+// same. The transit itself is not free: on that sweep the same build reads 574.5 with sc.hubExitRoll = 0
+// against 546.2 with the roll, and 4 in/s² (an 11 s settle) is the worst point of the deceleration curve,
+// so what the 28 points are paying for is the dwell, not the speed. sc.hubExitRoll = 0 puts the piece down
+// at its resting point the tick it leaves the HUB, which is the control the verifier measures the mouths
+// against; sc.hubExitDecel = 0 leaves it at a mouth with no speed at all, which is the control for the
+// assertion that a return is seen MOVING.
+const HUB_EXIT_MOUTHS_IN = [-17.625, -5.875, 5.875, 17.625];
+const HUB_EXIT_DECEL_IN_S2 = 20;
 const SHOT_FLIGHT_SEC = 0.55; // a ROBOT's launch: the same ball in the air whether it came from 20 in or
                               // 250 in, which is what the accuracy falloff is measured against
 // Two FUEL are balls on the carpet and cannot occupy the same point, but every landing in the engine
@@ -508,6 +533,50 @@ export function simulateMatch(opts) {
   // landing point instead of a hub index.
   const fpx = new Float32Array(total);
   const fpy = new Float32Array(total);
+  // Where a FUEL that a HUB handed back is rolling to and how fast, for the §5.4 exit roll. These are
+  // only read while the ball is in `rolling`, which holds the balls still moving; the roll stops the
+  // tick the piece arrives, is stopped by a structure in its way, or is dropped because the piece is no
+  // longer loose on the carpet.
+  const frx = new Float32Array(total);
+  const fry = new Float32Array(total);
+  const frv = new Float32Array(total);
+  const rolling = new Set();
+  const exitRoll = sc.hubExitRoll ?? 1;
+  // Swept like the other estimates: the deceleration sets how fast a piece leaves a mouth, and how fast
+  // it is moving decides how easily a ROBOT's mouth catches it mid-roll.
+  const exitDecel = sc.hubExitDecel ?? HUB_EXIT_DECEL_IN_S2;
+  // Half the §6.3.4.1 NEUTRAL ZONE staging band's LONG side, less a FUEL radius. That box is 206 x 72 in
+  // straddling the CENTER LINE, and the 206 in runs parallel to the line — across the FIELD, the same way
+  // the engine's own staging reads it (box.depthIn is the x half-extent, box.widthIn the y one) — so the
+  // lateral band a returned piece may be distributed across is ±100 in, not ±36. It used to be ±150, an
+  // unsourced number from the engine's first commit that put FUEL within 9 in of both guardrails, outside
+  // the width the manual gives for loose FUEL in this zone. Measured on the two-roster greedy sweep (192
+  // alliance scores per point): ±150 reads 581.3 and the band reads 546.2, so the fan was worth 35.1 points
+  // of throughput and the anchor is now 10.3% under the real Einstein average rather than 7.8% under. The
+  // roll does not move that distribution, which is the reason it could be added at all: with the band in
+  // place a median piece settles 111.4 in out from the HUB and 49.8 in off the centre line, where the
+  // instant hand-back reports 112.4 and 50.8 in the same tick. sc.hubExitLateralIn = 150 is the fan, kept
+  // as the arm every one of those figures is read against.
+  const exitLateralIn = sc.hubExitLateralIn ?? (FUEL.neutralView.widthIn / 2 - FUEL.diameterIn / 2);
+  // How far past the face a returned piece may be distributed. Swept next to the band because the two
+  // together are what the outlet cap was backed out against, and this one is the load-bearing half: on the
+  // same two-roster sweep, cutting the tail from 165 in to 90 costs 65.6 points (480.6 against 546.2),
+  // which is more than the band, the roll and the outlet cap together. Nothing in the manual says it — §5.4
+  // only says the exits distribute FUEL "into the NEUTRAL ZONE" — so it is the number to go and measure
+  // next, and sc.hubExitReachIn is the knob that will price whatever replaces it.
+  const exitReachIn = sc.hubExitReachIn ?? 165;
+  // Where a launch a DEFENDER stops comes to rest, and whether a car standing at a HUB can take a shot
+  // that is already flying over the prism into the opening (§5.4 puts that opening 72 in above the
+  // FIELD, so nothing of a ROBOT's bumper reaches it). Both are knobs so the verifier and the A/B arms can
+  // price the two rules against the build that had neither. On twelve naive-policy MATCHes of that build,
+  // 63 of the 173 launches a DEFENDER stopped came to rest further from the last frame the replay saw them
+  // in than their own step and a ball width allow, 59 of them with their resting point inside a HUB
+  // footprint and 13 of those out through the far face of the structure; scripts/verify.mjs runs the same
+  // two switches as the third control on its continuity walk, where they break the bound on 3 of 200
+  // landings (worst 13.7 in past it). The pair is worth 2.7 points of mirror and costs the AI 2.9 win
+  // points, so they are here because a FUEL must not be drawn inside a wall.
+  const stopAtBumper = sc.blockStopAtBumper ?? 1;
+  const openingIsOverhead = sc.blockAboveOpening ?? 1;
   // FUEL that just bounced off a defender cannot be re-ingested until it has settled, or a ROBOT
   // parked against one would shoot, swallow, and shoot the same ball on a loop that no real driver
   // would keep feeding.
@@ -1078,6 +1147,31 @@ export function simulateMatch(opts) {
     }
     return { x: px, y: py };
   }
+
+  // Which of the four §5.4 base exits a returned FUEL leaves by: the one nearest the point it is headed
+  // for, so a piece that comes down 100 in across the ZONE does not roll sideways past the other three
+  // mouths to get there. If that mouth is already stood on by a loose FUEL the next nearest is used, so two
+  // pieces never come out of the HUB stacked on each other — the same complaint as the resting spread, only
+  // at the exit.
+  function exitMouth(i, hub, dir, r, land) {
+    const mx = hub.x + dir * (FIELD.hub.sizeIn / 2 + r);
+    const order = [...HUB_EXIT_MOUTHS_IN].sort((a, b) => Math.abs(a - (land.y - hub.y)) - Math.abs(b - (land.y - hub.y)));
+    for (const off of order) {
+      const my = hub.y + off;
+      let taken = false;
+      if (fuelSpacing > 0) {
+        for (let j = 0; j < total; j++) {
+          if (j === i || fstate[j] !== 0) continue;
+          if (Math.hypot(mx - fx[j], my - fy[j]) < fuelSpacing) {
+            taken = true;
+            break;
+          }
+        }
+      }
+      if (!taken) return { x: mx, y: my };
+    }
+    return { x: mx, y: hub.y + order[0] };
+  }
   // The rollers are a separate mechanism from the shooter, so sweeping FUEL and putting a FUEL out
   // are not exclusive: a ROBOT dumping at its HUB lane keeps collecting whatever it is sitting on,
   // and so does one lobbing a PASS to a partner. Everything unique to a roller intake lives here —
@@ -1218,6 +1312,43 @@ export function simulateMatch(opts) {
       if (Math.abs(x - s.x) < s.hw + r && Math.abs(y - s.y) < s.hh + r) return true;
     }
     return false;
+  }
+
+  // A FUEL that is stopped mid-lane must not be left inside a structure. The flight is integrated a
+  // whole tick before the lane is tested (a piece at ~500 in/s crosses an entire ROBOT in 0.1 s), so the
+  // point it is caught at can already be on the far side of a HUB wall, and expelFromSolid would push it
+  // out along the SHORTEST axis — sometimes the face it had not reached yet. Measured on the naive
+  // mirror of 12 MATCHes, 59 of the 173 launches a DEFENDER stopped came to rest inside a HUB footprint,
+  // 13 of them out through the far face: the replay drew a blocked shot entering the prism on one side
+  // and lying on the carpet 25 in past it on the other, which is the same "FUEL spawns out of the HUB"
+  // tell the exit roll was added to remove. Pull it back along the line it came in on, to the face it
+  // actually crossed. Returns the point untouched when no structure contains it, which is nearly always.
+  function pullBackAlongLane(x, y, vx, vy, r) {
+    const len = Math.hypot(vx, vy);
+    if (len <= 0) return { x, y };
+    const ux = vx / len;
+    const uy = vy / len;
+    for (let k = 0; k < 4; k++) {
+      let hit = null;
+      for (const s of solids) {
+        if (s.bump) continue;
+        if (Math.abs(x - s.x) < s.hw + r && Math.abs(y - s.y) < s.hh + r) {
+          hit = s;
+          break;
+        }
+      }
+      if (!hit) break;
+      // Going back, each axis reaches its own face at a distance; the smaller is where the wall was
+      // crossed. 0.5 in of margin because every recorded position is truncated to a whole inch.
+      const dx = x - hit.x;
+      const dy = y - hit.y;
+      const ex = ux > 0 ? (dx + hit.hw + r) / ux : ux < 0 ? (dx - hit.hw - r) / ux : Infinity;
+      const ey = uy > 0 ? (dy + hit.hh + r) / uy : uy < 0 ? (dy - hit.hh - r) / uy : Infinity;
+      const back = Math.min(ex, ey) + 0.5;
+      x -= ux * back;
+      y -= uy * back;
+    }
+    return { x: clamp(x, 8, GEO.L - 8), y: clamp(y, 8, GEO.W - 8) };
   }
 
   // The escape hatch for FUEL that is already inside a structure (a PASS aimed into one, say): push
@@ -1685,15 +1816,21 @@ export function simulateMatch(opts) {
 
   // The nearest opponent whose BUMPERS straddle the launch lane. Called once per flight per tick with
   // the segment the FUEL just travelled, so a ROBOT is only credited with a block it was actually
-  // standing in front of.
+  // standing in front of. Also returns where the FUEL touches that car: the tick is integrated in full
+  // before the lane is tested, and a piece at ~500 in/s crosses a whole ROBOT in 0.1 s, so the position
+  // it is caught at is usually on the far side of the bumper. Returning the tangency point along the
+  // same circle the block test uses is what keeps a blocked shot where the defender standing.
   function laneBlocker(shooterAlliance, x0, y0, x1, y1) {
     let hit = null;
     let best = Infinity;
+    let at = null;
     const len = Math.hypot(x1 - x0, y1 - y0) || 1;
     // The lane's normal: a square blocker covers the lane by however much of itself projects onto it,
     // which is its own side when it is square to the shot and sqrt(2) times that when it is corner-on.
     const nx = -(y1 - y0) / len;
     const ny = (x1 - x0) / len;
+    const vx = x1 - x0;
+    const vy = y1 - y0;
     for (const o of robots) {
       if (o.alliance === shooterAlliance || o.disabled) continue;
       // A ROBOT hanging on the TOWER is above the lane, not in it.
@@ -1703,17 +1840,26 @@ export function simulateMatch(opts) {
       if (d > r || d / r >= best) continue;
       best = d / r;
       hit = o;
+      // Where the lane first meets the car's blocking circle, grown by the FUEL's own radius: step back
+      // from the closest approach by the half-chord. tCa is the closest-approach fraction of the segment.
+      const tCa = clamp(((o.x - x0) * vx + (o.y - y0) * vy) / (len * len), 0, 1);
+      const reach = r + FUEL_RADIUS_IN;
+      const t = clamp(tCa - Math.sqrt(Math.max(0, reach * reach - d * d)) / len, 0, 1);
+      at = { x: x0 + vx * t, y: y0 + vy * t };
     }
-    return hit;
+    return hit ? { robot: hit, at } : null;
   }
 
   // A blocked launch is not a scoring attempt that missed: the FUEL is still on the FIELD, so it
   // becomes loose where it hit and can be swept up again. Nothing scores, and the shot is charged to
   // the shooter as a blocked attempt (never a foul — G404 penalises *deliberately* launching at an
   // opponent, and a defender that drives into the lane is the one choosing the contact).
-  function blockedFlight(i, shooter, blocker) {
+  function blockedFlight(i, shooter, blocker, stopX, stopY) {
     flights.delete(i);
-    const land = placeLoose(i, fx[i], fy[i]);
+    // A shot taken by a car standing at a HUB is stopped over the prism, and a FUEL must not come to rest
+    // inside one, so the stop point is pulled back out along the line it came in on.
+    const stopped = stopAtBumper ? pullBackAlongLane(stopX, stopY, fvx[i], fvy[i], FUEL_RADIUS_IN) : { x: stopX, y: stopY };
+    const land = placeLoose(i, stopped.x, stopped.y);
     fstate[i] = 0;
     fx[i] = land.x;
     fy[i] = land.y;
@@ -2623,12 +2769,59 @@ export function simulateMatch(opts) {
       // slowing them down. Tested as a SWEPT SEGMENT, because at ~500 in/s a FUEL crosses a whole
       // ROBOT inside one tick and a point test would tunnel straight through it.
       const shooter = fshooter[i] >= 0 ? robots[fshooter[i]] : null;
-      const blocker = shooter ? laneBlocker(shooter.alliance, x0, y0, fx[i], fy[i]) : null;
-      if (blocker) {
-        blockedFlight(i, shooter, blocker);
+      let block = shooter ? laneBlocker(shooter.alliance, x0, y0, fx[i], fy[i]) : null;
+      // §5.4 puts the HUB's opening 72 in above the FIELD, so a FUEL on a line that takes it into the
+      // opening is above a ROBOT's bumper while it crosses the prism: a car parked at the HUB takes the
+      // shots that would have struck the wall, not the ones going in. Refusing the block there is also
+      // what stops a blocked FUEL from being caught inside a structure, which is where 59 of the 173
+      // launches the naive mirror stopped were coming to rest — 13 of them out through the far face.
+      if (openingIsOverhead && block && fscore[i] === 1 && solidBlocked(block.at.x, block.at.y, FUEL_RADIUS_IN)) block = null;
+      if (block) {
+        const at = stopAtBumper ? block.at : { x: fx[i], y: fy[i] };
+        blockedFlight(i, shooter, block.robot, at.x, at.y);
         continue;
       }
       if (ftimer[i] <= 0) resolveFlight(i, t);
+    }
+    // ---- a FUEL a HUB has returned is still travelling until friction stops it (§5.4) ----
+    if (rolling.size > 0) {
+      let rolled = 0;
+      for (const i of rolling) {
+        // A loose piece leaves the carpet by being swept up, corralled or launched. Rather than clear
+        // the roll at each of those sites, the roll simply stops when the ball is not loose any more —
+        // an integration that kept moving a HELD piece would tear it off its ROBOT.
+        if (fstate[i] !== 0) {
+          frv[i] = 0;
+          rolling.delete(i);
+          continue;
+        }
+        const dx = frx[i] - fx[i];
+        const dy = fry[i] - fy[i];
+        const d = Math.hypot(dx, dy);
+        const stepLen = frv[i] * tick;
+        frv[i] = Math.max(0, frv[i] - exitDecel * tick);
+        if (stepLen >= d) {
+          fx[i] = frx[i];
+          fy[i] = fry[i];
+          frv[i] = 0;
+          rolling.delete(i);
+          rolled += 1;
+          continue;
+        }
+        const nx = fx[i] + (dx / d) * stepLen;
+        const ny = fy[i] + (dy / d) * stepLen;
+        // A piece that runs into a structure stops against it, which is where it would have come to
+        // rest anyway. It is not pushed through or teleported past.
+        if (solidBlocked(nx, ny, FUEL_RADIUS_IN)) {
+          frv[i] = 0;
+          rolling.delete(i);
+          continue;
+        }
+        fx[i] = nx;
+        fy[i] = ny;
+        rolled += 1;
+      }
+      if (rolled > 0) rebuildHint();
     }
     // ---- HUB processing: scored FUEL reappears in the NEUTRAL ZONE (§5.4) ----
     for (const side of ['red', 'blue']) exitAcc[side] = Math.min(2, exitAcc[side] + hubExitRate * tick);
@@ -2642,13 +2835,35 @@ export function simulateMatch(opts) {
       exitAcc[target] -= 1;
       const hub = GEO[target].hub;
       const dir = target === 'red' ? 1 : -1;
-      const land = placeLoose(i, hub.x + dir * (FIELD.hub.sizeIn / 2 + rng.range(15, 165)), hub.y + rng.range(-150, 150));
+      // Where the HUB puts the piece back. The outward reach (15 to 165 in past the face) is the
+      // distribution the outlet cap was backed out against; the lateral band is not a guess — §6.3.4.1
+      // stages the NEUTRAL ZONE's FUEL in a 206 x 72 in box about the middle line, and the HUB centre is
+      // on that same middle line, so a returned piece belongs in the band the loose FUEL already lives in
+      // rather than fanned out to within 9 in of both guardrails. sc.hubExitLateralIn restores the wider
+      // fan as the control the verifier and the mirror sweeps read it against.
+      const land = placeLoose(i,
+        hub.x + dir * (FIELD.hub.sizeIn / 2 + rng.range(15, exitReachIn)),
+        hub.y + rng.range(-exitLateralIn, exitLateralIn));
       fstate[i] = 0;
-      fx[i] = land.x;
-      fy[i] = land.y;
+      fhub[i] = 0;
+      fshooter[i] = -1;
+      fholder[i] = -1;
       fhubout[i] = target === 'red' ? 1 : 2;
       hubReturned[target] += 1;
       processing.delete(i);
+      if (exitRoll > 0) {
+        // Out through a mouth, then along the line to the point sampled above.
+        const mouth = exitMouth(i, hub, dir, FUEL_RADIUS_IN, land);
+        fx[i] = mouth.x;
+        fy[i] = mouth.y;
+        frx[i] = land.x;
+        fry[i] = land.y;
+        frv[i] = Math.sqrt(2 * exitDecel * Math.hypot(land.x - fx[i], land.y - fy[i]));
+        rolling.add(i);
+      } else {
+        fx[i] = land.x;
+        fy[i] = land.y;
+      }
     }
 
     // The replay interpolates between recorded frames, so the recording is the display frame rate's

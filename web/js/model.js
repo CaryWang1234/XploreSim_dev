@@ -631,6 +631,18 @@ export function defaultScenario() {
     // before - and it is still not shipped. A knob with no independent measurement is not free to move:
     // every measured figure on the page is anchored on it, and retuning it is how the cost of a rule change
     // gets erased instead of reported. 4.2 ships and the shortfall is stated where it is read.
+    // The fourth re-sweep ran on the build that makes a HUB hand its FUEL back through a base exit and let
+    // it travel (see HUB_EXIT_DECEL_IN_S2 in engine.js): the curve moved down by the exit's dwell and kept
+    // its shape. The fifth runs on the build that then narrowed that return to §6.3.4.1's staging box and
+    // stopped a launch a DEFENDER catches inside the prism's wall — and on a harness that now averages BOTH
+    // rosters, so its numbers sit about 16 points under the anchor's own scale and only move relative to
+    // each other: 4.2 -> 546.2, 4.6 -> 559.9, 5.0 -> 568.1, 5.2 -> 578.3 (192 alliance scores each). About
+    // 10 points of mirror per 0.4 FUEL/s, which is what every earlier read said, and the red-blue split
+    // stays inside about one standard error at each point. The shipped cap therefore reads 12.9% under the
+    // real 627 on this scale and 10.3% under on the anchor's. 5.2 would put it back at the 7.8% this page
+    // was quoting before either correction, which is the same trade the paragraph above refuses: it is a
+    // knob with no independent measurement, and retuning it erases the cost of a rule change instead of
+    // reporting it. 4.2 ships and the shortfall is stated where it is read.
     hubExitRate: 4.2,
     faultsEnabled: true,
     // §7.4.4 G415/G416/G417 (opponent interaction) are off by default. The rules are real, but the one

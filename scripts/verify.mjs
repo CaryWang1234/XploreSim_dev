@@ -511,6 +511,19 @@ function passHubWalk(res) {
         } else if (crossed) shotCross += 1;
       }
     }
+    // The other way a flight ends is by the ball leaving the drawing altogether, which is exactly what a
+    // SCORED piece does: the HUB swallows it and state 6 is not recorded. Reading only the transitions
+    // that come back onto a drawn ball counts the handful of blocked and net-stopped launches and misses
+    // every one of the ~1,000 shots a MATCH that really does reach the HUB — 2 of 1,120 on one seed, 0 on
+    // another — so the control arm below was never measuring the detector, it was measuring noise.
+    for (const [id, p] of last) {
+      if (p[3] !== 4 || now.has(id)) continue;
+      const o = origin.get(id);
+      origin.delete(id);
+      if (!o) continue;
+      const crossed = hubs.some((h) => segmentBoxEntry(o.x, o.y, p[1], p[2], h.x, h.y, half) !== null);
+      if (o.pass) { if (crossed) passCross += 1; } else if (crossed) shotCross += 1;
+    }
     last.clear();
     for (const [id, b] of now) last.set(id, b);
   }
@@ -688,14 +701,14 @@ const AIM_TOL_IN = 3;
 // picked out by a short gap between the last in-flight frame and the first loose one. The control is
 // sc.netMiss = false, the pre-fix drop, which must put balls out past that face or the check is not
 // measuring anything.
-function missLandingRun(seed, netMiss, spread) {
+function missLandingRun(seed, netMiss, spread, extra) {
   const face = { red: GEO.red.hub.x + FIELD.hub.sizeIn / 2, blue: GEO.blue.hub.x - FIELD.hub.sizeIn / 2 };
   let landings = 0;
   let pastFace = 0;
   let worst = -Infinity;
   let oneFrame = 0;
   const jumps = [];
-  for (const f of flightWalk(seed, { netMiss, spread })) {
+  for (const f of flightWalk(seed, { netMiss, spread, extra })) {
     // A HUB exit waits out processingSec before the FUEL reappears, so a landing is told from an exit by
     // a short gap between the last in-flight frame and the first loose one.
     if (f.outcome !== 'loose' || f.gap > 6) continue;
@@ -742,6 +755,7 @@ function flightWalk(seed, opt = {}) {
     autoWinner: 'auto',
     ...(opt.netMiss === undefined ? {} : { netMiss: opt.netMiss }),
     ...(opt.spread === undefined ? {} : { shotSpreadIn: opt.spread }),
+    ...(opt.extra || {}),
   };
   const res = simulateMatch({
     redAlliance: makeAlliance(SAMPLES.slice(0, 3), 'red'),
@@ -839,13 +853,16 @@ function flightWalk(seed, opt = {}) {
 // before resolution is a step short of the aim point, and placeLoose() may nudge the landing by a ball
 // diameter, so the bound is 1.5 steps + 8 in rather than a magic number). The control is
 // sc.shotSpreadIn = 0, which restores the aimed-at-centre flight and the independent drop, and must
-// break the bound or the measurement is not looking at anything.
+// break the bound or the measurement is not looking at anything. The second control is sc.blockStopAtBumper
+// = 0 with sc.blockAboveOpening = 0, which restores the blocked landing that was left a tick past the
+// bumper and expelled out of whichever structure contained it; it has to break the bound too, because a
+// fan of 22 in on a free carpet is not the only way a FUEL can end up somewhere the replay did not draw.
 function dispersionChecks(seed) {
-  const run = (spread) => {
+  const run = (spread, extra) => {
     const jumps = [];
     let skipped = 0;
     for (const s of [seed, seed + 29]) {
-      const r = missLandingRun(s, undefined, spread);
+      const r = missLandingRun(s, undefined, spread, extra);
       jumps.push(...r.jumps);
       skipped += r.oneFrame;
     }
@@ -854,15 +871,25 @@ function dispersionChecks(seed) {
   };
   const on = run(undefined);
   const off = run(0);
+  // The other control is for the class of landing the fan has nothing to do with: a launch a DEFENDER
+  // stopped used to come to rest a whole tick past the bumper that took it — which, when the lane ran at
+  // the HUB, is inside the prism, and expelling it from there moved the piece out through the nearest
+  // face, sometimes the far one. With both rules off this same walk breaks the bound, so the bound is
+  // reading the stop point and not only the spread.
+  const blocked = run(undefined, { blockStopAtBumper: 0, blockAboveOpening: 0 });
   if (on.n < 20) throw new Error(`only ${on.n} shot landings recorded, so the continuity check has nothing to measure`);
   if (on.skipped > on.n) throw new Error(`${on.skipped} of ${on.n + on.skipped} landings were single-frame flights, so the bound is being tested against a minority of them`);
   if (on.bad > 0) throw new Error(`${on.bad} of ${on.n} missed shots came to rest more than a step and a ball width from where the replay last saw them flying (worst ${on.worst.toFixed(1)} in past the bound)`);
   if (off.bad === 0) {
     throw new Error('the no-dispersion control broke the continuity bound zero times, so the walk is not measuring the teleport it is meant to catch');
   }
+  if (blocked.bad === 0) {
+    throw new Error('the old blocked-flight control broke the continuity bound zero times, so the bound is not reading where a stopped FUEL comes to rest');
+  }
   console.log('--- a launch lands where it was drawn going (last flight frame to rest, bound 1.5 steps + 8 in) ---');
   console.log(`  dispersion on  landings ${on.n} (plus ${on.skipped} blocked in their first tick)  outside the bound ${on.bad}  worst overshoot ${on.worst.toFixed(1)} in`);
   console.log(`  control, spread 0: outside the bound ${off.bad} of ${off.n} landings, worst ${off.worst.toFixed(1)} in, so the walk is not blind`);
+  console.log(`  control, blocked shot left where the tick put it: outside the bound ${blocked.bad} of ${blocked.n} landings, worst ${blocked.worst.toFixed(1)} in`);
 }
 
 // A fan has to open in two different places at once: a made shot goes into the 41.7 in opening (§5.4), a
@@ -931,6 +958,168 @@ function aimChecks(seed) {
   console.log(`  misses ${on.miss.length}  median ${half(on.miss).toFixed(1)}  closest ${on.closestMiss.toFixed(1)} against the ${HUB_FACE_IN} in face`);
   console.log(`  ${on.cut} flights left the air with more than a tick of fuse still on them, or were swept up again the frame after they landed, so they say nothing about an aim and are not counted`);
   console.log(`  control, spread 0: ${centred.made.length} made shots at median ${half(centred.made).toFixed(1)} in, worst ${centredWorst.toFixed(1)}, so the walk reads the aim it is given`);
+}
+
+// §5.4 read from the HUB's other end: "HUBS have a series of exits at the base of the HUB facing towards
+// the NEUTRAL ZONE. FUEL processed through the HUB are distributed into the NEUTRAL ZONE via one of four
+// exits". The engine used to hand a processed piece back by writing its resting coordinates in the tick the
+// exit queue released it, so the replay showed a ball simply appear a hundred inches from the structure with
+// nothing drawn in between — the first thing anyone watching the replay noticed. A return now starts at one
+// of the four mouths and rolls out to that same sampled point, which is why the RESTING distribution every
+// published figure is anchored on does not move while the transit does, and why the mouth is chosen from the
+// piece's index rather than from the random stream (the release still spends exactly the two draws it always
+// spent, so a recorded MATCH replays the same).
+//
+// A return is told from any other way a ball comes back onto the carpet by the gap: a piece blocked by a
+// defender or stopped by the net is drawn again the next frame, while a processed one waits out the HUB's
+// processing time first. MOUTH_TOL_IN carries the whole-inch truncation of the record (0.5 in) and the slack
+// of a quarter-spacing. MAX_ROLL_STEP_IN carries one frame at the fastest release the sampling allows — the
+// farthest rest point is about 200 in from a mouth, so v = sqrt(2 * 20 * 200) = 89 in/s, 8.9 in per 0.1 s
+// frame, plus the truncation — and it is applied only to a step no ROBOT was within reach of, because a
+// ROBOT driving through a rolling piece moves it at its own speed, not the piece's. That exclusion is not
+// decoration: measured with the window at 23 in, 19 of the 18,249 steps counted break the bound and the
+// worst reads 24.2 in, and every one of them disappears with sc.bulldoze = 0, so those steps are the push,
+// not the exit. The window itself is one frame of the fastest shipped ROBOT's travel (180 in/s = 18 in) plus
+// its corner reach (19.8 in) and the FUEL's radius, rounded up. The third assertion is the other half of the
+// complaint — a piece drawn at a mouth and then never moving — and it counts the returns whose OWN steps add
+// up to at least 5 in, because travel measured from first sight to last is what a ROBOT's push fakes. The
+// control is sc.hubExitDecel = 0: every release still starts at a mouth, none of them moves, and the count has
+// to read zero. The first control is sc.hubExitRoll = 0, the instant hand-back, which must fail the mouth
+// test or this walk is blind.
+const HUB_EXIT_MOUTHS_IN = [-17.625, -5.875, 5.875, 17.625];
+const HUB_EXIT_MOUTH_X_IN = FIELD.hub.sizeIn / 2 + FUEL.diameterIn / 2;
+const MOUTH_TOL_IN = 4;
+const MAX_ROLL_STEP_IN = 18;
+// How close a ROBOT has to be to a piece for a step to count as the ROBOT's doing rather than the roll's.
+const ROBOT_TOUCH_IN = 50;
+
+function hubExitRun(seed, opt = {}) {
+  const scenario = { ...defaultScenario(), seed, autoWinner: 'auto', ...opt };
+  const res = simulateMatch({
+    redAlliance: makeAlliance(SAMPLES.slice(0, 3), 'red'),
+    blueAlliance: makeAlliance(SAMPLES.slice(0, 3), 'blue'),
+    redPolicy: naivePolicy('red'),
+    bluePolicy: naivePolicy('blue'),
+    scenario,
+    record: true,
+  });
+  const frames = res.timeline;
+  const runs = new Map();
+  const flights = [];
+  frames.forEach((f, k) => {
+    const live = new Set();
+    for (const b of f.fuel) {
+      if (b[3] !== 4) continue;
+      live.add(b[0]);
+      const r = runs.get(b[0]);
+      if (r && r.k === k - 1) {
+        r.k = k;
+        r.tgt = b[4];
+      } else {
+        if (r) flights.push(r);
+        runs.set(b[0], { k, id: b[0], tgt: b[4] });
+      }
+    }
+    for (const [id, r] of runs) if (!live.has(id)) { flights.push(r); runs.delete(id); }
+  });
+  const out = [];
+  for (const fl of flights) {
+    if (fl.tgt === 3) continue;
+    const hub = fl.tgt === 1 ? GEO.red.hub : GEO.blue.hub;
+    const dir = fl.tgt === 1 ? 1 : -1;
+    let first = null;
+    for (let k = fl.k + 1; k < frames.length && k <= fl.k + 120; k++) {
+      const b = frames[k].fuel.find((e) => e[0] === fl.id);
+      if (!b) continue;
+      if (b[3] === 4) break; // launched again before it was ever drawn loose
+      first = { k, x: b[1], y: b[2] };
+      break;
+    }
+    if (!first || first.k - fl.k <= 6) continue;
+    const path = [[first.x, first.y]];
+    // A step counts against the roll only while no ROBOT is close enough to have shoved the piece. The
+    // roll ends the tick the piece stops, and whatever the FIELD does to it after that is not the exit.
+    let touched = 0;
+    const steps = [];
+    let prev = [first.x, first.y];
+    for (let k = first.k + 1; k < frames.length && k <= first.k + 60; k++) {
+      const b = frames[k].fuel.find((e) => e[0] === fl.id);
+      if (!b || b[3] === 4) break;
+      const step = Math.hypot(b[1] - prev[0], b[2] - prev[1]);
+      const near = frames[k].r.some((r) => Math.hypot(r.x - b[1], r.y - b[2]) < ROBOT_TOUCH_IN);
+      if (near) touched += 1;
+      else steps.push(step);
+      path.push([b[1], b[2]]);
+      prev = [b[1], b[2]];
+      if (step === 0) break;
+    }
+    const mouthOff = Math.min(...HUB_EXIT_MOUTHS_IN.map((m) => Math.abs(first.y - hub.y - m)));
+    out.push({
+      mouthOff,
+      mouthX: (first.x - hub.x) * dir,
+      frames: path.length,
+      maxStep: steps.length ? Math.max(...steps) : 0,
+      clearSteps: steps.length,
+      // The roll's own distance: the steps no ROBOT was near, summed. Travel measured from first sight to
+      // last would count a ROBOT's push as the exit's work, which is the opposite of what is being proved.
+      clearTravel: steps.reduce((s, v) => s + v, 0),
+      touched,
+      // how far the piece got from where it was first seen, which is the whole content of the complaint
+      travel: Math.hypot(path[path.length - 1][0] - path[0][0], path[path.length - 1][1] - path[0][1]),
+    });
+  }
+  return out;
+}
+
+function hubExitChecks(seed) {
+  const walk = (opt) => {
+    const acc = [];
+    for (const s of [seed, seed + 29]) acc.push(...hubExitRun(s, opt));
+    return {
+      n: acc.length,
+      offMouth: acc.filter((o) => o.mouthOff > MOUTH_TOL_IN || Math.abs(o.mouthX - HUB_EXIT_MOUTH_X_IN) > MOUTH_TOL_IN),
+      closest: acc.length ? Math.max(...acc.map((o) => Math.max(o.mouthOff, Math.abs(o.mouthX - HUB_EXIT_MOUTH_X_IN)))) : 0,
+      jumps: acc.filter((o) => o.maxStep > MAX_ROLL_STEP_IN),
+      worstJump: acc.length ? Math.max(...acc.map((o) => o.maxStep)) : 0,
+      // The third half of the complaint is a piece that is drawn and then never moves. It is read off the
+      // roll's own steps, because a piece a ROBOT is standing on says nothing about the exit either way —
+      // and in the zero-speed control the mouths are camped, so almost every piece is swept inside two
+      // frames. `rolled` counts the returns seen moving under the roll; `sat` the ones the walk could not
+      // read. The control is sc.hubExitDecel = 0, which gives every return a mouth and no speed.
+      rolled: acc.filter((o) => o.clearTravel >= 5).length,
+      sat: acc.filter((o) => o.frames >= 3 && o.clearSteps < 2).length,
+      travelled: acc.filter((o) => o.frames >= 3).map((o) => o.travel).sort((a, b) => a - b),
+      touched: acc.reduce((s, o) => s + o.touched, 0),
+    };
+  };
+  const on = walk({});
+  const off = walk({ hubExitRoll: 0 });
+  // The second control is for the parked assertion alone: sc.hubExitDecel = 0 leaves the piece at a mouth
+  // with no speed at all, which is the failure the assertion describes. If it does not park, the assertion
+  // is reading nothing.
+  const stalled = walk({ hubExitDecel: 0 });
+  if (on.n < 40) throw new Error(`only ${on.n} HUB returns read out of the replay, so the exit check has nothing to measure`);
+  if (on.offMouth.length !== 0) {
+    throw new Error(`${on.offMouth.length} of ${on.n} FUEL came back onto the FIELD without starting at one of the four HUB exits (worst ${on.closest.toFixed(1)} in off a mouth)`);
+  }
+  if (on.jumps.length !== 0) {
+    throw new Error(`${on.jumps.length} of ${on.n} returns moved ${on.worstJump.toFixed(1)} in between two drawn frames, past one frame of roll (${MAX_ROLL_STEP_IN} in) — a piece is still being teleported`);
+  }
+  if (on.rolled * 2 < on.n) {
+    throw new Error(`only ${on.rolled} of ${on.n} returns are seen moving under the roll (${on.sat} were sat on from their second frame), so the exit is not moving them`);
+  }
+  if (off.offMouth.length === 0) {
+    throw new Error('the instant hand-back control put every return at a mouth too, so this walk is not measuring the exit');
+  }
+  if (stalled.rolled !== 0) {
+    throw new Error(`the zero-speed control moved ${stalled.rolled} of its ${stalled.n} returns, so what this walk calls the roll is not the roll`);
+  }
+  const med = (a) => (a.length ? a[Math.floor(a.length / 2)] : NaN);
+  console.log('--- §5.4 a FUEL a HUB hands back leaves through a base exit and rolls out ---');
+  console.log(`  returns ${on.n}  all start within ${MOUTH_TOL_IN} in of a mouth (worst ${on.closest.toFixed(2)} in off; mouths sit ${(FIELD.hub.sizeIn / 2 + FUEL.diameterIn / 2).toFixed(1)} in from the HUB centre)`);
+  console.log(`  ${on.rolled} of them are seen moving under the roll, ${on.sat} were sat on from their second frame; median travel from first sight ${med(on.travelled).toFixed(1)} in, worst own step ${on.worstJump.toFixed(1)} in against the ${MAX_ROLL_STEP_IN} in frame ceiling; ${on.touched} steps were skipped because a ROBOT was within ${ROBOT_TOUCH_IN} in and shoved the piece`);
+  console.log(`  control, instant hand-back: ${off.offMouth.length} of ${off.n} returns appear away from a mouth (worst ${off.closest.toFixed(1)} in off), so the walk is not blind`);
+  console.log(`  control, zero exit speed: ${stalled.rolled} of ${stalled.n} returns move under the roll, which is what the count above is reading`);
 }
 
 // FUEL spacing. §5.10.1 makes FUEL a 5.91 in ball, so two of them cannot sit at one point. The
@@ -1291,6 +1480,7 @@ seamChecks(20260110);
 missLandingChecks(20260110);
 dispersionChecks(20260110);
 aimChecks(20260110);
+hubExitChecks(20260110);
 startChecks(20260110);
 spacingChecks(20260110);
 contactChecks(20260110);

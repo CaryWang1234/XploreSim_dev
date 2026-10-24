@@ -23,6 +23,7 @@
     "gap": "node scripts/gap.mjs",
     "range": "node scripts/range.mjs",
     "lever": "node scripts/lever.mjs",
+    "knob": "node scripts/knob.mjs",
     "team": "node scripts/team.mjs",
     "cap": "node scripts/cap.mjs",
     "defcal": "node scripts/defcal.mjs",

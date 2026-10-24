@@ -60,6 +60,17 @@ const PHYS = {
   // resolution instead of flown to: the stream collapses to one line and a miss comes down somewhere
   // else. That is the control for the dispersion, and for the continuity guard in scripts/verify.mjs.
   noShotSpread: { shotSpreadIn: 0 },
+  // Restores the hand-back that wrote a processed FUEL at its resting coordinates the tick the HUB
+  // released it, instead of putting it out through a base exit and letting it travel there (§5.4). The
+  // control for the exit roll, and for the guard that reads the mouths out of the replay.
+  noHubExitRoll: { hubExitRoll: 0 },
+  // Restores where a launch a DEFENDER stopped used to come to rest: a whole tick past the bumper that
+  // took it, which is often inside the HUB's prism, and then expelled out the structure's shortest way —
+  // sometimes the far face. Together with noOpeningHeight it is the control for the continuity guard.
+  noBlockStop: { blockStopAtBumper: 0 },
+  // Restores a ROBOT standing at a HUB taking a shot that was flying over the prism into the opening,
+  // which is 72 in above the FIELD (§5.4) and therefore above any bumper on the carpet.
+  noOpeningHeight: { blockAboveOpening: 0 },
   noSeamLock: { seamLock: false },
   physAllOff: { turretOpportunityMarginIn: 0, contactRestitution: -1, dumperFaceTolDeg: 180 },
 };

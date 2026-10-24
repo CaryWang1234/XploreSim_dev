@@ -35,6 +35,7 @@ Every number the site states is reproducible from a committed script:
 | `npm run ab` | the AI against a named baseline over disjoint seed families; `ARMS=`, `SEAT=`, `N=`, `FAMILIES=`, `SWEEP=`, `PHYS=`, `EFFS=`, `PREPS=`, `DUMPS=` expand arms |
 | `npm run seat` | decomposes a same-roster mirror into collected / scored / wasted / blocked per ALLIANCE, under each `autoWinner` |
 | `npm run lever` | what DRIVER, chassis, mechanism, intake face and a benched ROBOT are worth |
+| `npm run knob` | one engine scenario knob at a time on the greedy mirror (`KNOB=`, `VALS=`, `EXTRA=`, `N=`) — the harness every "the anchor would move by X" figure is read with |
 | `npm run probe` | throughput: FUEL/s, loose-FUEL density, intake tick share |
 | `npm run dark` | how the inactive window was spent, and how many shots went into a dead HUB |
 | `npm run gap` | collected vs scored vs wasted vs distance, by DRIVER level |
@@ -281,13 +282,13 @@ The rules this repo has learned the hard way, all of them from a figure that tur
 
 Stated on the page too, because a planner is used to make decisions:
 
-- AUTO scoring is low: the engine puts ≈97 FUEL in during AUTO (92.4 red, 100.8 blue over 12 MATCHes,
+- AUTO scoring is low: the engine puts ≈85 FUEL in during AUTO (95.4 red, 74.5 blue over 12 MATCHes,
   and `autoWinner: 'auto'` resolves that from the simulation, so a 12-MATCH probe does not split it
   evenly) where real Einstein Finals alliances managed 111-177. The fix for a specific team is the
   card's **AUTO FUEL scored** box, which replaces those 20 seconds with the measurement instead of the
   model — see "A declared AUTO". It is not a fix for the anchor: the shipped cards declare nothing, so
   this gap is still what the calibration is measured against.
-- TELEOP throughput is high: 5.36 FUEL/s per alliance against ≈4.7 in the real finals.
+- TELEOP throughput is high: 5.01 FUEL/s per alliance against ≈4.7 in the real finals.
 - The YELLOW/RED CARD ladder is enforceable now, and it is not switched on. §6.6.1 says yellows are
   additive and a RED disqualifies the team for the MATCH, so `sc.cardLadder` (Setup → "Enforce the card
   ladder") takes the machine that earned the second one out of the rest of the MATCH. `npm run cards`
@@ -310,24 +311,39 @@ Stated on the page too, because a planner is used to make decisions:
 ## Calibration anchors
 
 Real 2026 Einstein Finals data from The Blue Alliance (event `2026cmptx`): alliance average 627, high
-842. The greedy same-roster mirror is 591.7 (597.9 and 585.5 across the two trios), 5.6% under that
-average. Against the hand-written greedy cycling baseline, on identical ROBOTs, the search wins 67.2% of
-MATCHes (n=96, 24 per family over four disjoint seed families) with a margin of +27.9 and a score of
-657.3 against 629.5.
+842. The greedy same-roster mirror is 562.7 (562.1 and 563.4 across the two seed sets, the trio
+254/1678/1690 on both ALLIANCES), 10.3% under that average; the other trio, 4414/5940/11019, reads 534.0 on
+the same MATCHes, which is the roster and not the seat. Against the hand-written greedy cycling baseline, on
+identical ROBOTs, the search wins 74.3% of MATCHes (n=96, 24 per family over four disjoint seed families)
+with a margin of +43.9 and a score of 666.6 against 622.7.
 
-The anchor sits 5.6% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
-back. Three model changes put it there. The BUMP/TRENCH seam (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP,
-so the two lanes inside a band meet at one seam and nothing connects them) took about 16 points off the
-whole outlet-cap curve. Giving a launch a dispersion costs about 5 points on one sweep of the shipped build
-(aiming every shot at the centre reads 597.7 against 592.6 at the 22 in that ships) and is worth 7.8 win
-points AGAINST the search, because a fan of loose FUEL around the HUB helps the machine that only cycles
-more than it helps the one that plans. And the first version of that fan clamped every launch out to the
-HUB's 47 in square footprint, which is outside the 20.85 in opening it was supposed to be aiming at:
+The anchor sits 10.3% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
+back. Six model changes put it there, and the last four are read with `npm run knob`, which averages both
+rosters and therefore sits about 16 points under the anchor's own scale. The BUMP/TRENCH seam
+(§5.5/§5.6: a TRENCH runs guardrail-to-BUMP, so the two lanes inside a band meet at one seam and nothing
+connects them) took about 16 points off the whole outlet-cap curve. Giving a launch a dispersion reads −17.2
+on that sweep (aiming every shot at the centre is worth 563.4 against the 546.2 the 22 in that ships gives)
+and costs 6.4 win points AGAINST the search, because a fan of loose FUEL around the HUB helps the machine
+that only cycles more than the one that plans. The first version of that fan clamped every launch out to the
+HUB's 47 in square footprint, which is outside the 20.85 in opening it was supposed to be aiming at;
 limiting that clamp to misses cost a further 1.7 points between builds (593.4 → 591.7) and is what
-`scripts/verify.mjs` now measures as two populations.
-Re-swept on this build, `hubExitRate` 4.2 → 592.6, 4.6 → 602.3,
-5.0 → 613.2, 5.2 → 614.6 at 192 MATCHes per point, with the red-blue split inside one standard error
-everywhere: 5.0 would bring the anchor to 2.2% under, which is only at the edge of the band. It is not
-shipped. The cap has no independent measurement,
-every figure on the page is anchored on it, and moving a calibrated knob to erase the cost of a rule change
-is how a simulator stops meaning anything.
+`scripts/verify.mjs` now measures as two populations. §5.4's HUB exit — "FUEL processed through the HUB are
+distributed into the NEUTRAL ZONE via one of four exits" — was a write of the resting coordinates; making a
+piece come out through a mouth and travel to where it lands costs 28.3 on that sweep (574.5 with the instant
+hand-back against 546.2 with the roll), and almost none of it is anywhere the FUEL ends up: a median piece
+settles 111.4 in from the HUB and 49.8 in off the centre line, where the hand-back reports 112.4 and 50.8.
+What the 28.3 pays for is the 2.7 s a median piece is still moving after it first appears. Narrowing the
+band it is scattered across, from the ±150 in fan the engine has carried since its first commit to the
+±100 in that §6.3.4.1's staging box leaves after a FUEL radius, costs another 35.1 (581.3 → 546.2): the
+largest single price of staying inside the manual in this part of the model, and the evidence that some of
+the old throughput was bought by spreading FUEL further apart than the FIELD allows. A launch a DEFENDER
+stops now comes down at the bumper that took it rather than a tick further on, which gives 2.7 back: the
+tick used to carry the FUEL inside the prism and the placement code expelled it out the shortest face,
+sometimes the far one, so on the naive mirror 59 of 173 stopped launches were drawn arriving on one side of
+a HUB and lying on the carpet 25 in past the other.
+Re-swept on this build, `hubExitRate` 4.2 → 546.2, 4.6 → 559.9,
+5.0 → 568.1, 5.2 → 578.3 at 192 alliance scores per point, with the red-blue split inside about one
+standard error everywhere: the whole curve moved down by the exit's dwell and the narrowed band and kept its
+shape, and even 5.2 only takes the page back to the 7.8% it was quoting before either correction. It is not
+shipped. The cap has no independent measurement, every figure on the page is anchored on it, and moving a
+calibrated knob to erase the cost of a rule change is how a simulator stops meaning anything.
