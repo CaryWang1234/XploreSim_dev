@@ -428,14 +428,22 @@ export const GEO = (() => {
       //             the ALLIANCE WALL at the guardrail end.
       //   dump    - the upper opening, 31.8 x 7.0 in with its floor 28.1 in up, which passes FUEL to
       //             the FIELD, so a CHUTE dump lands on open carpet in the other half of the frontage.
-      corral: { x: 19, y: 18, w: 37.6, h: 35.8 },
-      feed: { x: -16, y: 35 },
+      // Which CORNER of the ALLIANCE WALL the OUTPOST takes is not a free choice (§5.9.2 "1 on
+      // either end of the FIELD connecting the guardrail to the ALLIANCE WALL"). Figure 6-2 puts the
+      // red DEPOT at one guardrail and the blue OUTPOST CHUTE at that same guardrail, and Figure 5-4
+      // labels the blue OUTPOST AREA in the corner above the blue DEPOT, so each OUTPOST hugs the
+      // long side its OWN DEPOT is not on: red's DEPOT is at y = 0, so red's OUTPOST hugs y = W.
+      // Building both of them next to the DEPOT (which is what this file did until now) is the one
+      // corner the manual never uses, and it moves the CHUTE outlet, the CORRAL and the HP's throw
+      // across the FIELD's width — every number measured through the OUTPOST moved with it.
+      corral: { x: 19, y: W - 18, w: 37.6, h: 35.8 },
+      feed: { x: -16, y: W - 35 },
       // The HUMAN PLAYER stands behind the ALLIANCE WALL in the OUTPOST AREA (§5.9.2), between the
       // two openings. Keeping it off the FIELD is the whole of its protection: the engine resolves
       // ROBOT contact only between ROBOTs and clamps every ROBOT inside the ALLIANCE WALL, so no
       // ROBOT can reach it (G421).
-      human: { x: -16, y: 35 },
-      dump: { x: 20, y: 53, w: 36, h: 34 },
+      human: { x: -16, y: W - 35 },
+      dump: { x: 20, y: W - 53, w: 36, h: 34 },
       shoot: { x: 118, y: yc },
       shootStations: shootStations(118, -1),
       corridors: corridors(),
@@ -458,10 +466,11 @@ export const GEO = (() => {
       hub: { x: L - shift, y: yc },
       tower: { x: L - FIELD.tower.baseDepthIn / 2 - 4, y: yc },
       depot: { x: L - 13.5, y: W - 110, w: FIELD.depot.depthIn, h: FIELD.depot.widthIn },
-      corral: { x: L - 19, y: W - 18, w: 37.6, h: 35.8 },
-      feed: { x: L + 16, y: W - 35 },
-      human: { x: L + 16, y: W - 35 },
-      dump: { x: L - 20, y: W - 53, w: 36, h: 34 },
+      // The 180 deg pair of red's OUTPOST: blue's DEPOT hugs y = W, so blue's OUTPOST hugs y = 0.
+      corral: { x: L - 19, y: 18, w: 37.6, h: 35.8 },
+      feed: { x: L + 16, y: 35 },
+      human: { x: L + 16, y: 35 },
+      dump: { x: L - 20, y: 53, w: 36, h: 34 },
       shoot: { x: L - 118, y: yc },
       shootStations: shootStations(L - 118, 1),
       corridors: corridors(),
@@ -544,6 +553,16 @@ export function simulateMatch(opts) {
   // Whether a scored shot was launched legally: 1 = the ROBOT's BUMPERS were inside its ALLIANCE ZONE
   // (G407 / §5.4), 0 = outside, which the HUB's back net stops. Unused for a PASS or an HP throw.
   const flegal = new Uint8Array(total);
+  // Where a piece last came to rest on the carpet (`ftouch`, a match-local counter) and the counter value
+  // the CHUTE gave it when it dumped it (`fdumped`, 0 = never). The scouting split asks where a ROBOT's
+  // FUEL was lying when it took it, and "at the FEED outlet" is this pair rather than a footprint test:
+  // a piece the HP dumped stays a feed-outlet piece after it has been shoved across the FIELD, but once
+  // it is shot and its HUB hands it back the marker no longer matches and the pickup belongs to the
+  // carpet it was actually lying on. That is also what keeps the column honest with the HP idle — a
+  // rectangle around the dump read half a dozen FUEL a MATCH on a build where the HP never dumped one.
+  let carpetGen = 0;
+  const ftouch = new Int32Array(total);
+  const fdumped = new Int32Array(total);
   // Where a passed FUEL is aimed. A pass is a launch that is NOT at a HUB, so it carries its own
   // landing point instead of a hub index.
   const fpx = new Float32Array(total);
@@ -1138,7 +1157,10 @@ export function simulateMatch(opts) {
   // piles that the match itself built, which would change how the whole FIELD plays.
   function placeLoose(i, x, y) {
     const land = expelFromSolid(x, y, FUEL_RADIUS_IN);
-    if (fuelSpacing <= 0) return land;
+    if (fuelSpacing <= 0) {
+      ftouch[i] = ++carpetGen;
+      return land;
+    }
     let px = land.x;
     let py = land.y;
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -1160,6 +1182,7 @@ export function simulateMatch(opts) {
       px = nx;
       py = ny;
     }
+    ftouch[i] = ++carpetGen;
     return { x: px, y: py };
   }
 
@@ -1242,13 +1265,16 @@ export function simulateMatch(opts) {
   // count means the NEUTRAL ZONE and the opponent's half together, because what the split prices is how
   // far from home a machine had to work. A collector that only ever finds FUEL in the middle is spending
   // its MATCH crossing BUMPS and TRENCHES; one that only takes it at the outlet is a feed line.
-  function fuelSourceOf(rb, x, y) {
-    for (const side of ['red', 'blue']) {
-      const d = GEO[side].dump;
-      if (Math.abs(x - d.x) <= d.w / 2 + 10 && Math.abs(y - d.y) <= d.h / 2 + 10) return 'feed';
-    }
+  //
+  // The outlet is the piece's own history (`fdumped`), not a rectangle around the dump. This used to be
+  // a footprint test, and the flow ledger showed what that was worth: with the HP idle it still read
+  // half a dozen FUEL a MATCH, all of it carpet that happened to be lying in the corner, so the column
+  // was not measuring the CHUTE at all. The verifier now holds both ends of it — HP HOLD must read 0 and
+  // a forced DUMP must read more than 0 — so the column cannot drift back into a coincidence.
+  function fuelSourceOf(rb, i) {
+    if (fdumped[i] && fdumped[i] === ftouch[i]) return 'feed';
     const g = GEO[rb.alliance];
-    return x >= g.allianceZone[0] && x <= g.allianceZone[1] ? 'zone' : 'neutral';
+    return fx[i] >= g.allianceZone[0] && fx[i] <= g.allianceZone[1] ? 'zone' : 'neutral';
   }
 
   function takeFuelNear(rb, radius, rate, dt, mouthReach = 0) {
@@ -1289,7 +1315,7 @@ export function simulateMatch(opts) {
           rb.carrying += 1;
           got += 1;
           rb.stat.fuelCollected += 1;
-          rb.stat.collectFrom[fuelSourceOf(rb, fx[i], fy[i])] += 1;
+          rb.stat.collectFrom[fuelSourceOf(rb, i)] += 1;
           // Taken back out of the FIELD after this ALLIANCE's own HUB had already processed it once: the
           // piece is on its second trip, which is what makes a HUB a feed rather than a drain.
           if (fhubout[i] === (rb.alliance === 'red' ? 1 : 2)) rb.stat.fuelReclaimed += 1;
@@ -1806,6 +1832,7 @@ export function simulateMatch(opts) {
             clamp(g.dump.y + rng.range(-g.dump.h / 2, g.dump.h / 2), 8, GEO.W - 8));
           fstate[i] = 0;
           fholder[i] = -1;
+          fdumped[i] = ftouch[i];
           fx[i] = land.x;
           fy[i] = land.y;
           hp.stat.dumped += 1;

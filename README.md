@@ -169,7 +169,7 @@ with a reason and a working page, and **Forget saved setup** drops both halves. 
 
 ## A declared AUTO replaces the simulated 20 seconds
 
-The engine's own AUTO is the one place the build is known to be low: `npm run probe` reads ≈97 FUEL an
+The engine's own AUTO is the one place the build is known to be low: `npm run probe` reads ≈85 FUEL an
 ALLIANCE against 111-177 at the real Einstein Finals, because a real auto is a preprogrammed play whose
 outcome a team has *measured*, not a cycle the physics has to rediscover. Each card therefore has an
 **AUTO FUEL scored** box. Blank means the ordinary simulation. A number means that machine starts AUTO
@@ -282,13 +282,13 @@ The rules this repo has learned the hard way, all of them from a figure that tur
 
 Stated on the page too, because a planner is used to make decisions:
 
-- AUTO scoring is low: the engine puts ≈89 FUEL in during AUTO (105.2 red, 72.8 blue over 12 MATCHes,
+- AUTO scoring is low: the engine puts ≈85 FUEL in during AUTO (81.8 red, 88.5 blue over 12 MATCHes,
   and `autoWinner: 'auto'` resolves that from the simulation, so a 12-MATCH probe does not split it
   evenly) where real Einstein Finals alliances managed 111-177. The fix for a specific team is the
   card's **AUTO FUEL scored** box, which replaces those 20 seconds with the measurement instead of the
   model — see "A declared AUTO". It is not a fix for the anchor: the shipped cards declare nothing, so
   this gap is still what the calibration is measured against.
-- TELEOP throughput is high: 5.02 FUEL/s per alliance against ≈4.7 in the real finals.
+- TELEOP throughput is high: 4.95 FUEL/s per alliance against ≈4.7 in the real finals.
 - The YELLOW/RED CARD ladder is enforceable now, and it is not switched on. §6.6.1 says yellows are
   additive and a RED disqualifies the team for the MATCH, so `sc.cardLadder` (Setup → "Enforce the card
   ladder") takes the machine that earned the second one out of the rest of the MATCH. `npm run cards`
@@ -311,33 +311,35 @@ Stated on the page too, because a planner is used to make decisions:
 ## Calibration anchors
 
 Real 2026 Einstein Finals data from The Blue Alliance (event `2026cmptx`): alliance average 627, high
-842. The greedy same-roster mirror is 562.7 (562.1 and 563.4 across the two seed sets, the trio
-254/1678/1690 on both ALLIANCES), 10.3% under that average; the other trio, 4414/5940/11019, reads 534.0 on
+842. The greedy same-roster mirror is 566.2 (566.3 and 566.1 across the two seed sets, the trio
+254/1678/1690 on both ALLIANCES), 9.7% under that average; the other trio, 4414/5940/11019, reads 528.7 on
 the same MATCHes, which is the roster and not the seat. Against the hand-written greedy cycling baseline, on
-identical ROBOTs, the search wins 70.3% of MATCHes (n=96, 24 per family over four disjoint seed families)
-with a margin of +39.6 and a score of 656.6 against 617.0.
+identical ROBOTs, the search wins 78.1% of MATCHes (n=96, 24 per family over four disjoint seed families)
+with a margin of +37.2 and a score of 661.4 against 624.2.
 
-The anchor sits 10.3% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
-back. Six model changes put it there, and the last four are read with `npm run knob`, which averages both
-rosters and therefore sits about 16 points under the anchor's own scale. The BUMP/TRENCH seam
+The anchor sits 9.7% under, outside the ±2% the mirror is read in, and it is disclosed rather than tuned
+back. A chain of model changes put it there, most of them read off `npm run knob`, which averages both
+rosters and therefore sits about 17 points under the anchor's own scale; the OUTPOST corner, two paragraphs
+down, is the one that gave 3.5 of it back. The BUMP/TRENCH seam
 (§5.5/§5.6: a TRENCH runs guardrail-to-BUMP, so the two lanes inside a band meet at one seam and nothing
-connects them) took about 16 points off the whole outlet-cap curve. Giving a launch a dispersion reads −17.2
-on that sweep (aiming every shot at the centre is worth 563.4 against the 546.2 the 22 in that ships gives)
-and costs 12.0 win points AGAINST the search, because a fan of loose FUEL around the HUB helps the machine
-that only cycles more than the one that plans. The first version of that fan clamped every launch out to the
+connects them) took about 16 points off the whole outlet-cap curve. Giving a launch a dispersion reads −11.4
+on that sweep (aiming every shot at the centre is worth 560.3 against the 548.9 the 22 in that ships gives)
+and, against the search, costs 5.4 points of its own score and hands it 18.3 of margin without moving the
+win rate — a fan of loose FUEL around the HUB helps the machine that only cycles more than the one that
+plans, and on this build that shows in the margin rather than in MATCHes won. The first version of that fan clamped every launch out to the
 HUB's 47 in square footprint, which is outside the 20.85 in opening it was supposed to be aiming at;
 limiting that clamp to misses cost a further 1.7 points between builds (593.4 → 591.7) and is what
 `scripts/verify.mjs` now measures as two populations. §5.4's HUB exit — "FUEL processed through the HUB are
 distributed into the NEUTRAL ZONE via one of four exits" — was a write of the resting coordinates; making a
-piece come out through a mouth and travel to where it lands costs 28.3 on that sweep (574.5 with the instant
-hand-back against 546.2 with the roll), and almost none of it is anywhere the FUEL ends up: a median piece
+piece come out through a mouth and travel to where it lands costs 14.9 on that sweep (563.8 with the instant
+hand-back against 548.9 with the roll), and almost none of it is anywhere the FUEL ends up: a median piece
 settles 111.4 in from the HUB and 49.8 in off the centre line, where the hand-back reports 112.4 and 50.8.
-What the 28.3 pays for is the 2.7 s a median piece is still moving after it first appears. Narrowing the
+What the 14.9 pays for is the 2.7 s a median piece is still moving after it first appears. Narrowing the
 band it is scattered across, from the ±150 in fan the engine has carried since its first commit to the
-±100 in that §6.3.4.1's staging box leaves after a FUEL radius, costs another 35.1 (581.3 → 546.2): the
+±100 in that §6.3.4.1's staging box leaves after a FUEL radius, costs another 39.3 (586.4 → 547.1): the
 largest single price of staying inside the manual in this part of the model, and the evidence that some of
 the old throughput was bought by spreading FUEL further apart than the FIELD allows. A launch a DEFENDER
-stops now comes down at the bumper that took it rather than a tick further on, which gives 2.7 back: the
+stops now comes down at the bumper that took it rather than a tick further on, which gives 1.6 back: the
 tick used to carry the FUEL inside the prism and the placement code expelled it out the shortest face,
 sometimes the far one, so on the naive mirror 59 of 173 stopped launches were drawn arriving on one side of
 a HUB and lying on the carpet 25 in past the other.
@@ -354,9 +356,31 @@ identical, which `npm run golden` reports as an unchanged digest) and 9.5 points
 against it. A throw's ground track is still a straight chord: the model carries no height in a flight, and a
 lob seen from directly above is a straight chord too. Making a pass look like a lob is a drawing job — the
 airborne radius swelling, a ground shadow shortening as the fuse runs out — not a physics one.
-Re-swept on this build, `hubExitRate` 4.2 → 546.2, 4.6 → 559.9,
-5.0 → 568.1, 5.2 → 578.3 at 192 alliance scores per point, with the red-blue split inside about one
+Re-swept on this build, `hubExitRate` 4.2 → 548.9, 4.6 → 559.8,
+5.0 → 570.2, 5.2 → 575.1 at 192 alliance scores per point, with the red-blue split inside about one
 standard error everywhere: the whole curve moved down by the exit's dwell and the narrowed band and kept its
-shape, and even 5.2 only takes the page back to the 7.8% it was quoting before either correction. It is not
+shape, and even 5.2 only lands 8.3% under the real average, about where the page was before either
+correction. It is not
 shipped. The cap has no independent measurement, every figure on the page is anchored on it, and moving a
 calibrated knob to erase the cost of a rule change is how a simulator stops meaning anything.
+
+The OUTPOST now stands in the corner the manual puts it in. §5.9.2 says "1 on either end of the FIELD
+connecting the guardrail to the ALLIANCE WALL" without saying which end, so it comes from the drawings:
+Figure 6-2 labels two staging boxes "24 FUEL" — the red DEPOT at one long guardrail and the blue OUTPOST
+CHUTE at that same guardrail — and Figure 5-4 labels the blue OUTPOST AREA in the corner above the blue
+DEPOT. Each OUTPOST therefore hugs the long side its own DEPOT is not on. The engine had both of them in
+the corner beside their DEPOT, the one arrangement none of those figures shows, which put the CHUTE outlet,
+the CORRAL mouth and the HP's dump on the wrong side of the width: fixing it moved the CORRAL 282 in and
+the dump 212 in. It is a geometry change and the anchors moved with it — the greedy mirror 562.7 → 566.2,
+the AI's own mirror 553.2 → 563.4, AI-vs-greedy 70.3% → 78.1% — while the pinned mirror barely noticed
+(608.5 → 607.9). That last one is the check that the difference is about the OUTPOST rather than about the
+random stream: no ROBOT in a pinned plan is ever assigned a FEED role, so the CORRAL's corner is out of its
+way, and a change that moved scores without the OUTPOST would have moved it too.
+
+The same pass caught the FEED column in the scouting split. "FUEL taken at the FEED outlet" was a rectangle
+around the dump, and on the new corner it read five to eight FUEL a MATCH on a build whose HP never dumped
+one — it was counting carpet that happened to lie there. A piece the CHUTE puts down now carries the mark
+(`fdumped`, checked against a per-landing counter in `ftouch`), so it stays a feed-outlet pickup after being
+shoved across the FIELD and stops being one once its HUB hands it back, and `npm run verify` holds both ends
+of the column: the HP holding the CHUTE all MATCH reads 0 pickups, the CHUTE forced open every tick reads
+16.

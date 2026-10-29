@@ -6,7 +6,7 @@ import { TIME, POINTS, FUEL, FIELD, rpBars } from '../web/js/rules.js';
 import { defaultScenario, makeAlliance, makeRobot, SAMPLES, periodAt } from '../web/js/model.js';
 import { simulateMatch, INTENT, GEO, CONTACT_UNABLE_SEVERITY, segmentBoxEntry, bandAtX, bandRegionOf, BUMP_TRENCH_SEAM_IN } from '../web/js/engine.js';
 import { monteCarlo, matchSeed } from '../web/js/mc.js';
-import { DEFAULT_WEIGHTS } from '../web/js/ai.js';
+import { DEFAULT_WEIGHTS, humanChoice } from '../web/js/ai.js';
 import { readFileSync } from 'node:fs';
 
 // Reference policy for engine validation: a plain greedy state machine with sticky behaviour
@@ -1461,17 +1461,25 @@ function fieldChecks(seed) {
 // mechanism: the control arm shuts the HUB exits, and a HUB that returns nothing has nothing to be reclaimed
 // from it.
 function flowChecks(seed) {
-  const run = (extra) => simulateMatch({
-    redAlliance: makeAlliance(SAMPLES.slice(0, 3).map((p) => ({ ...p })), 'red'),
-    blueAlliance: makeAlliance(SAMPLES.slice(3, 6).map((p) => ({ ...p })), 'blue'),
-    redPolicy: naivePolicy('red'),
-    bluePolicy: naivePolicy('blue'),
-    scenario: { ...defaultScenario(), seed, autoWinner: 'auto', ...extra },
-    record: true,
-  });
+  // `human` is the OUTPOST's own actor. The ledger has a FEED column, so it needs an HP that can dump
+  // into it: the shared rule (the one the AI and the baselines ship with) is attached here rather than
+  // inherited from the baseline, because a policy with no `human` leaves the HP standing still and the
+  // column would read zero for a reason that has nothing to do with the bookkeeping.
+  const run = (extra, human) => {
+    const withHuman = (side) => ({ ...naivePolicy(side), ...(human ? { human } : {}) });
+    return simulateMatch({
+      redAlliance: makeAlliance(SAMPLES.slice(0, 3).map((p) => ({ ...p })), 'red'),
+      blueAlliance: makeAlliance(SAMPLES.slice(3, 6).map((p) => ({ ...p })), 'blue'),
+      redPolicy: withHuman('red'),
+      bluePolicy: withHuman('blue'),
+      scenario: { ...defaultScenario(), seed, autoWinner: 'auto', ...extra },
+      record: true,
+    });
+  };
+  const feedOf = (res) => res.robotStats.reduce((a, s) => a + s.collectFrom.feed, 0);
   const wrong = [];
   const tally = { taken: 0, neutral: 0, zone: 0, feed: 0, kept: 0, back: 0, scored: 0, wasted: 0, scoreSec: 0, feedSec: 0, droveIn: 0 };
-  for (const r of [run({}), run({ seed: seed + 977 })]) {
+  for (const r of [run({}, humanChoice), run({ seed: seed + 977 }, humanChoice)]) {
     for (const s of r.robotStats) {
       const cf = s.collectFrom;
       const srcSum = cf.neutral + cf.zone + cf.feed;
@@ -1494,11 +1502,19 @@ function flowChecks(seed) {
     }
     tally.back += r.hubReturned.red + r.hubReturned.blue;
   }
-  const shut = run({ hubExitRate: 0 });
+  const shut = run({ hubExitRate: 0 }, humanChoice);
   const shutBack = shut.hubReturned.red + shut.hubReturned.blue;
   const shutKept = shut.robotStats.reduce((a, s) => a + s.fuelReclaimed, 0);
   if (shutBack > 0) wrong.push(`a HUB with its exits shut still handed ${shutBack} FUEL back onto the FIELD`);
   if (shutKept > 0) wrong.push(`${shutKept} FUEL was reclaimed from HUBs that returned none`);
+  // The FEED column has to move with the CHUTE and nothing else: force the HP to hold and it must read
+  // zero on the same MATCH, force it to dump and the robots must find some of it. Before the column was
+  // tagged at the dump it read a handful of FUEL a MATCH with the HP holding still, which is what a
+  // footprint around the outlet is worth when the outlet moves to a corner nobody sweeps.
+  const feedHeld = feedOf(run({}, () => 'HOLD'));
+  const feedDumped = feedOf(run({}, () => 'DUMP'));
+  if (feedHeld !== 0) wrong.push(`the HP held the CHUTE all MATCH and ${feedHeld} pickups still counted as a FEED outlet`);
+  if (feedDumped <= 0) wrong.push('the HP dumped every tick and no ROBOT took a dumped piece, so the FEED column cannot be read');
   if (tally.feed <= 0) wrong.push('nobody took FUEL at a FEED outlet in either MATCH, so the split cannot tell a feed line from a collector');
   if (tally.kept <= 0) wrong.push('no ALLIANCE kept anything out of its own HUB returns, so the reclaim column measures nothing');
   if (wrong.length) throw new Error(`flow ledger: ${wrong.join('; ')}`);
@@ -1506,6 +1522,7 @@ function flowChecks(seed) {
   console.log(`  ${tally.taken} FUEL taken over 2 MATCHes: ${tally.neutral} in the NEUTRAL ZONE, ${tally.zone} in an ALLIANCE ZONE, ${tally.feed} at a FEED outlet · the HUBs handed ${tally.back} back onto the FIELD and the fleets took ${tally.kept} of them (${Math.round((tally.kept / tally.back) * 100)}%)`);
   console.log(`  ${tally.scored} went into an active HUB against ${tally.wasted} into a dark one, so ${Math.round((tally.scored / (tally.scored + tally.wasted)) * 100)}% of what reached a HUB reached a window · ${tally.scoreSec.toFixed(0)} s of SCORE mode and ${tally.feedSec.toFixed(0)} s of FEED mode over ${(tally.droveIn / 12 / 6).toFixed(0)} ft a ROBOT`);
   console.log(`  with the exits shut the HUBs return ${shutBack} and the reclaim column reads ${shutKept}, which is the control: the column moves with the mechanism it names`);
+  console.log(`  with the HP holding the same MATCH reads ${feedHeld} FEED pickups, and with the CHUTE forced open every tick it reads ${feedDumped}, so the column is the CHUTE rather than the corner it lands in`);
 }
 
 function batchLadderChecks(seed) {

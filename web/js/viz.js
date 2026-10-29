@@ -152,11 +152,13 @@ export class FieldView {
     frect(GEO.blue.allianceZone[0], 0, GEO.L - GEO.blue.allianceZone[0], GEO.W, 'rgba(47,125,225,0.09)');
 
     // The OUTPOST footprint in each off-field strip: a 71 in wide volume at the guardrail corner
-    // (§5.9.2), with the CHUTE running from the ALLIANCE WALL out to where the HP stands.
+    // (§5.9.2), with the CHUTE running from the ALLIANCE WALL out to where the HP stands. The corner
+    // is the one opposite that ALLIANCE's DEPOT (Figures 5-2 / 5-4 / 6-2), so red's strip is at the
+    // far guardrail and blue's at the near one.
     for (const side of ['red', 'blue']) {
       const g = GEO[side];
       const x0 = side === 'red' ? -PAD_IN : GEO.L;
-      const y0 = side === 'red' ? 0 : GEO.W - 71;
+      const y0 = side === 'red' ? GEO.W - 71 : 0;
       frect(x0, y0, PAD_IN, 71, side === 'red' ? 'rgba(224,65,63,0.14)' : 'rgba(47,125,225,0.14)');
       ctx.strokeStyle = 'rgba(223,231,243,0.35)';
       ctx.lineWidth = 1;
